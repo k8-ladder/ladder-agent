@@ -37,6 +37,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 | `setup.retry` | none | `SetupStatus`; continues from the failed step |
 | `git.http` | `GitHTTPRequest` | `GitHTTPResponse`: Gitea's status, content type and body |
 | `argocd.credentials` | none | `{ username, password }` from Secret `argocd-initial-admin-secret` |
+| `agent.upgrade` | `{ version }` | `AgentUpgrade` with `state: running`; see [Upgrade](#upgrade) |
 
 `SetupPlan`:
 
@@ -94,6 +95,7 @@ inside the cluster.
 | `setup.status` | after connect and on every step change | `SetupStatus` |
 | `apps.snapshot` | after connect, and once the Argo CD watch starts | `AppsSnapshot` (`watching: false` until the Application CRD exists) |
 | `apps.changed` | an Application's sync, health, revision or operation phase changed | `{ app: AppStatus, deleted?: true }` |
+| `agent.upgrade` | an upgrade starts or fails, and after a connect while one is known | `AgentUpgrade`: `state` (`running`, `failed`), `from`, `to`, `image`, `error` |
 
 `SetupStatus.state` is one of `not_started`, `running`, `done` or `failed`. A step's `status` is
 one of `pending`, `running`, `done`, `skipped` (for example, Argo CD install when it is reused) or
@@ -114,6 +116,22 @@ are read only while the app is not `Healthy`, and only from events seen since it
 `Healthy`, so a rollout does not show the warnings of an earlier one. Argo CD shows these
 problems only in its resource tree, not in the Application. An app that exists in git but has no
 Application is the backend's to show as `Missing`.
+
+## Upgrade
+
+`agent.upgrade` runs `version` as a tag of the image repository the agent runs from: the cloud
+cannot pick another image. The agent sets the tag in its Deployment, together with what an older
+install lacks: `RollingUpdate` with `maxUnavailable: 0`, the readiness probe `/readyz`, and
+`POD_NAME`. The new pod is ready once it has connected to the cloud, so the old agent keeps running
+until then. When the new agent connects, the backend drops the old connection with
+`StatusPolicyViolation`; an agent whose connection is taken waits 30 s before it reconnects, so
+Kubernetes can stop it. The upgrade is done when an agent of the new version sends `agent.hello`.
+
+The old agent fails the upgrade when a new pod's image does not pull, its container cannot be
+created, it exits, or it is not ready within 5 minutes. It then sets its own image back and pushes
+`agent.upgrade` with `state: failed` and `error`. Errors: `bad_request` for a tag that is not valid,
+`failed_precondition` for the version that runs already, `conflict` while setup or another
+upgrade runs. A new agent resumes an interrupted setup only once it is the Deployment's only pod.
 
 ## Push webhook
 

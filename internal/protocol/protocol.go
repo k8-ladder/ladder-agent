@@ -41,6 +41,8 @@ const (
 	MethodGitHTTP = "git.http"
 	// MethodArgoCDCredentials reads the initial Argo CD admin password.
 	MethodArgoCDCredentials = "argocd.credentials"
+	// MethodAgentUpgrade replaces the agent with another version of its image.
+	MethodAgentUpgrade = "agent.upgrade"
 )
 
 // Events from the agent to the backend.
@@ -49,6 +51,8 @@ const (
 	EventSetupStatus  = "setup.status"
 	EventAppsSnapshot = "apps.snapshot"
 	EventAppsChanged  = "apps.changed"
+	// EventAgentUpgrade reports an upgrade from the agent being replaced.
+	EventAgentUpgrade = "agent.upgrade"
 )
 
 // Error codes.
@@ -88,6 +92,29 @@ type Hello struct {
 	Context           string `json:"context"`
 	KubernetesVersion string `json:"kubernetesVersion"`
 }
+
+// AgentUpgradeRequest asks the agent to run another version: a tag of the
+// image repository it runs from.
+type AgentUpgradeRequest struct {
+	Version string `json:"version"`
+}
+
+// AgentUpgrade answers agent.upgrade and is pushed as agent.upgrade. The
+// upgrade is done when an agent of version To says hello.
+type AgentUpgrade struct {
+	State string `json:"state"` // running | failed
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Image string `json:"image"`
+	// Error says why the new version did not start; the agent is back on From.
+	Error string `json:"error,omitempty"`
+}
+
+// Upgrade states.
+const (
+	UpgradeRunning = "running"
+	UpgradeFailed  = "failed"
+)
 
 // ClusterInfo answers cluster.info: facts for the cluster screen.
 type ClusterInfo struct {

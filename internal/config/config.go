@@ -29,7 +29,7 @@ type Config struct {
 	// outside the cluster with kubectl port-forward.
 	GiteaURL string
 
-	// HTTPAddr serves /healthz and Gitea's push webhook.
+	// HTTPAddr serves /healthz, /readyz and Gitea's push webhook.
 	HTTPAddr string
 	LogLevel string
 }

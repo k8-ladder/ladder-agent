@@ -48,8 +48,8 @@ func NewEngine(jobCtx context.Context, k *kube.Clients, h *helmx.Helm, g *gitea.
 	}
 }
 
-// Load reads saved progress and resumes a setup that was running when the
-// agent stopped.
+// Load reads saved progress. Resume continues a setup that was running when
+// the agent stopped.
 func (e *Engine) Load(ctx context.Context) error {
 	plan, status, err := e.store.load(ctx)
 	if err != nil || plan == nil {
@@ -58,11 +58,18 @@ func (e *Engine) Load(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.plan, e.status = plan, *status
-	if e.status.State == protocol.SetupRunning {
+	return nil
+}
+
+// Resume continues a setup that Load found running. The caller makes sure the
+// agent that ran it has stopped.
+func (e *Engine) Resume() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.status.State == protocol.SetupRunning && !e.running {
 		e.log.Info("resuming setup")
 		e.start()
 	}
-	return nil
 }
 
 // Repo is the repository chosen by setup, if any.

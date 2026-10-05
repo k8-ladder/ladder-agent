@@ -40,6 +40,8 @@ type Client struct {
 	onConnect []func()
 
 	session atomic.Pointer[session]
+	// ready is set on the first connect: the cloud took the token.
+	ready atomic.Bool
 }
 
 func New(url, token string, log *slog.Logger) *Client {
@@ -55,6 +57,11 @@ func (c *Client) OnConnect(f func()) { c.onConnect = append(c.onConnect, f) }
 
 // Connected reports whether a session is open.
 func (c *Client) Connected() bool { return c.session.Load() != nil }
+
+// Ready reports whether the agent has connected since it started. It stays
+// true when the connection drops: it is the readiness of the agent's pod, and
+// an upgrade replaces the old agent once the new one is ready.
+func (c *Client) Ready() bool { return c.ready.Load() }
 
 // Emit pushes an event. It never blocks: while disconnected the event is
 // dropped, since every connect starts with fresh snapshots.
@@ -86,11 +93,17 @@ func (c *Client) Run(ctx context.Context) {
 		if connected {
 			backoff = minBackoff
 		}
-		c.log.Warn("backend connection lost", "err", err, "retryIn", backoff.String())
+		wait := backoff + rand.N(backoff/2)
+		if websocket.CloseStatus(err) == websocket.StatusPolicyViolation {
+			// Another agent took the connection, as the new one does in an
+			// upgrade: give Kubernetes time to stop this one.
+			wait = maxBackoff
+		}
+		c.log.Warn("backend connection lost", "err", err, "retryIn", wait.String())
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff + rand.N(backoff/2)):
+		case <-time.After(wait):
 		}
 		backoff = min(backoff*2, maxBackoff)
 	}
@@ -123,6 +136,7 @@ func (c *Client) serve(ctx context.Context) (connected bool, err error) {
 
 	c.session.Store(s)
 	defer c.session.Store(nil)
+	c.ready.Store(true)
 	for _, f := range c.onConnect {
 		f()
 	}
