@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps
+  namespace: [[ .ArgoCDNamespace ]]
+spec:
+  description: Apps managed through Ladder
+  sourceRepos:
+    - [[ .RepoURL ]]
+  # Any namespace except the platform ones; only namespaced kinds.
+  destinations:
+    - {server: https://kubernetes.default.svc, namespace: "![[ .ArgoCDNamespace ]]"}
+    - {server: https://kubernetes.default.svc, namespace: "!ladder"}
+    - {server: https://kubernetes.default.svc, namespace: "!ladder-git"}
+    - {server: https://kubernetes.default.svc, namespace: "!kube-*"}
+    - {server: https://kubernetes.default.svc, namespace: "*"}
+  clusterResourceWhitelist: []

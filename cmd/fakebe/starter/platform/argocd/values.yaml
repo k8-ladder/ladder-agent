@@ -1,0 +1,35 @@
+# Helm values for Argo CD. Argo CD manages itself with these values through
+# bootstrap/argocd.yaml: change them with a commit.
+configs:
+  params:
+    # No TLS in the POC: the UI is plain HTTP behind the ingress controller.
+    server.insecure: true
+    # The UI and the API are served under /argocd.
+    server.rootpath: /argocd
+    server.basehref: /argocd
+dex:
+  enabled: false
+notifications:
+  enabled: false
+[[- if eq .Exposure "ingress" ]]
+# The UI through the cluster's default ingress class. The chart's own Ingress
+# always sets a host, so this one is declared here.
+extraObjects:
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: argocd-server
+      namespace: [[ .ArgoCDNamespace ]]
+    spec:
+      rules:
+        - [[ with .Host ]]host: [[ . ]]
+          [[ end ]]http:
+            paths:
+              - path: /argocd
+                pathType: Prefix
+                backend:
+                  service:
+                    name: argocd-server
+                    port:
+                      number: 80
+[[- end ]]

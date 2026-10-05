@@ -1,0 +1,5 @@
+# Ladder settings. Edit by hand.
+branch: main
+appsPath: apps
+defaultChart: web-app
+writeMode: [[ .WriteMode ]]    # commit | pr

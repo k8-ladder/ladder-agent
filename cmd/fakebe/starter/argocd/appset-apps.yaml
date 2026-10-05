@@ -1,0 +1,41 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps
+  namespace: [[ .ArgoCDNamespace ]]
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: [[ .RepoURL ]]
+        revision: main
+        files:
+          - path: "apps/*/app.yaml"
+  template:
+    metadata:
+      name: "{{.name}}"
+      labels:
+        ladder.dev/managed: "true"
+    spec:
+      project: apps
+      sources:
+        - repoURL: [[ .RepoURL ]]
+          targetRevision: main
+          path: "charts/{{.chart}}"
+          helm:
+            releaseName: "{{.name}}"
+            valueFiles:
+              - "$values/{{.path.path}}/values.yaml"
+        - repoURL: [[ .RepoURL ]]
+          targetRevision: main
+          ref: values
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.namespace}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
