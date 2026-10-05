@@ -179,3 +179,30 @@ func (c *Client) CommitFiles(ctx context.Context, owner, repo, branch, message s
 		"files":   ops,
 	}, nil, nil)
 }
+
+// EnsureWebhook makes the repository post pushes to main to hookURL, signed
+// with secret. A webhook with the same URL is updated, so that the secret
+// follows Secret ladder-git-admin.
+func (c *Client) EnsureWebhook(ctx context.Context, owner, repo, hookURL, secret string) error {
+	var hooks []struct {
+		ID     int64             `json:"id"`
+		Config map[string]string `json:"config"`
+	}
+	base := "/repos/" + owner + "/" + repo + "/hooks"
+	if err := c.do(ctx, http.MethodGet, base, nil, nil, &hooks); err != nil {
+		return err
+	}
+	hook := map[string]any{
+		"config":        map[string]string{"url": hookURL, "content_type": "json", "secret": secret},
+		"events":        []string{"push"},
+		"branch_filter": "main",
+		"active":        true,
+	}
+	for _, h := range hooks {
+		if h.Config["url"] == hookURL {
+			return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/%d", base, h.ID), hook, nil, nil)
+		}
+	}
+	hook["type"] = "gitea"
+	return c.do(ctx, http.MethodPost, base, hook, nil, nil)
+}

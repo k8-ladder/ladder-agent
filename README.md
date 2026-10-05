@@ -69,7 +69,7 @@ so Local mode then needs `kubectl -n ladder-git port-forward svc/gitea-http 3000
 | `ARGOCD_CHART_REPO` | `https://argoproj.github.io/argo-helm` | |
 | `GITEA_IMAGE` | `gitea/gitea:1.27.3-rootless` | |
 | `LADDER_GITEA_URL` | in-cluster service | override for running outside the cluster |
-| `HEALTH_ADDR` | `:8081` | `/healthz` |
+| `HTTP_ADDR` | `:8081` | `/healthz` and Gitea's push webhook `/hooks/git` |
 | `LOG_LEVEL` | `info` | |
 
 ## Known gaps in the POC

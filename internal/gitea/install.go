@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"text/template"
 	"time"
@@ -38,21 +39,25 @@ type Credentials struct {
 	AdminPassword  string
 	ReaderPassword string
 	Token          string
+	// HookSecret signs the push webhook.
+	HookSecret string
 }
 
 type Installer struct {
 	k       *kube.Clients
 	image   string
 	baseURL string
+	hookURL string
 	log     *slog.Logger
 }
 
-// NewInstaller: baseURL overrides InClusterURL when the agent runs outside the cluster.
-func NewInstaller(k *kube.Clients, image, baseURL string, log *slog.Logger) *Installer {
+// NewInstaller: baseURL overrides InClusterURL when the agent runs outside the
+// cluster. hookURL is where Gitea delivers push events to the agent.
+func NewInstaller(k *kube.Clients, image, baseURL, hookURL string, log *slog.Logger) *Installer {
 	if baseURL == "" {
 		baseURL = InClusterURL()
 	}
-	return &Installer{k: k, image: image, baseURL: strings.TrimRight(baseURL, "/"), log: log}
+	return &Installer{k: k, image: image, baseURL: strings.TrimRight(baseURL, "/"), hookURL: hookURL, log: log}
 }
 
 // Credentials reads Secret ladder-git-admin; nil if it does not exist yet.
@@ -68,6 +73,7 @@ func (i *Installer) Credentials(ctx context.Context) (*Credentials, error) {
 		AdminPassword:  string(s.Data["admin-password"]),
 		ReaderPassword: string(s.Data["argocd-password"]),
 		Token:          string(s.Data["token"]),
+		HookSecret:     string(s.Data["webhook-secret"]),
 	}, nil
 }
 
@@ -101,8 +107,9 @@ func (i *Installer) RepoReady(ctx context.Context, repo string) (bool, error) {
 	return c.RepoExists(ctx, Owner, repo)
 }
 
-// Install brings up Gitea and creates the users and the repository. Every
-// part is idempotent, so a failed or interrupted install can simply rerun.
+// Install brings up Gitea and creates the users, the repository and its push
+// webhook. Every part is idempotent, so a failed or interrupted install can
+// simply rerun, and a newer agent reruns it to update an older install.
 func (i *Installer) Install(ctx context.Context, repo string) error {
 	if err := i.k.EnsureNamespace(ctx, Namespace); err != nil {
 		return err
@@ -128,7 +135,7 @@ func (i *Installer) Install(ctx context.Context, repo string) error {
 		if err != nil {
 			return fmt.Errorf("create API token: %w", err)
 		}
-		if err := i.saveToken(ctx, token); err != nil {
+		if err := i.saveKey(ctx, "token", token); err != nil {
 			return fmt.Errorf("save API token: %w", err)
 		}
 		creds.Token = token
@@ -144,6 +151,15 @@ func (i *Installer) Install(ctx context.Context, repo string) error {
 	if err := c.AddCollaborator(ctx, Owner, repo, ReaderUser, "read"); err != nil {
 		return fmt.Errorf("grant %s read access: %w", ReaderUser, err)
 	}
+	if creds.HookSecret == "" {
+		creds.HookSecret = randomString(32)
+		if err := i.saveKey(ctx, "webhook-secret", creds.HookSecret); err != nil {
+			return fmt.Errorf("save webhook secret: %w", err)
+		}
+	}
+	if err := c.EnsureWebhook(ctx, Owner, repo, i.hookURL, creds.HookSecret); err != nil {
+		return fmt.Errorf("create push webhook: %w", err)
+	}
 	return nil
 }
 
@@ -155,6 +171,7 @@ func (i *Installer) ensureSecret(ctx context.Context) (*Credentials, error) {
 		StringData: map[string]string{
 			"admin-password":  randomString(24),
 			"argocd-password": randomString(24),
+			"webhook-secret":  randomString(32),
 		},
 	}
 	_, err := i.k.Kube.CoreV1().Secrets(Namespace).Create(ctx, secret, metav1.CreateOptions{})
@@ -164,7 +181,7 @@ func (i *Installer) ensureSecret(ctx context.Context) (*Credentials, error) {
 	return i.Credentials(ctx)
 }
 
-func (i *Installer) saveToken(ctx context.Context, token string) error {
+func (i *Installer) saveKey(ctx context.Context, key, value string) error {
 	s, err := i.k.Kube.CoreV1().Secrets(Namespace).Get(ctx, AdminSecret, metav1.GetOptions{})
 	if err != nil {
 		return err
@@ -172,14 +189,21 @@ func (i *Installer) saveToken(ctx context.Context, token string) error {
 	if s.Data == nil {
 		s.Data = map[string][]byte{}
 	}
-	s.Data["token"] = []byte(token)
+	s.Data[key] = []byte(value)
 	_, err = i.k.Kube.CoreV1().Secrets(Namespace).Update(ctx, s, metav1.UpdateOptions{})
 	return err
 }
 
 func (i *Installer) applyManifests(ctx context.Context) error {
 	var buf bytes.Buffer
-	if err := manifests.Execute(&buf, map[string]any{"Image": i.image, "Namespace": Namespace, "Secret": AdminSecret, "Service": Service, "Port": Port, "RootURL": InClusterURL() + "/"}); err != nil {
+	hook, err := url.Parse(i.hookURL)
+	if err != nil {
+		return fmt.Errorf("webhook URL: %w", err)
+	}
+	if err := manifests.Execute(&buf, map[string]any{
+		"Image": i.image, "Namespace": Namespace, "Secret": AdminSecret, "Service": Service, "Port": Port,
+		"RootURL": InClusterURL() + "/", "HookHost": hook.Hostname(),
+	}); err != nil {
 		return err
 	}
 	for _, doc := range strings.Split(buf.String(), "\n---\n") {
@@ -272,6 +296,9 @@ spec:
             - {name: GITEA__service__DISABLE_REGISTRATION, value: "true"}
             - {name: GITEA__database__DB_TYPE, value: sqlite3}
             - {name: GITEA__repository__DEFAULT_BRANCH, value: main}
+            # Webhooks may call only the agent: by default Gitea refuses
+            # private addresses such as cluster Services.
+            - {name: GITEA__webhook__ALLOWED_HOST_LIST, value: "{{.HookHost}}"}
             - name: ADMIN_PASSWORD
               valueFrom: {secretKeyRef: {name: {{.Secret}}, key: admin-password}}
           volumeMounts:

@@ -1,5 +1,6 @@
-// Package argo watches Argo CD Applications of Ladder apps and reports their
-// sync and health status.
+// Package argo watches Argo CD Applications of Ladder apps and the objects
+// they make, and reports sync and health status and what Kubernetes reports
+// as wrong with those objects.
 package argo
 
 import (
@@ -12,9 +13,11 @@ import (
 
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/protocol"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -33,21 +36,69 @@ type Watcher struct {
 	// OnSnapshot is called once the cache is synced.
 	OnSnapshot func(protocol.AppsSnapshot)
 
+	// objects is set before the informers start.
+	objects objects
+
 	mu       sync.RWMutex
-	apps     map[string]protocol.AppStatus
+	apps     map[string]app
 	watching bool
 }
 
+// app is what the watcher keeps of one Application.
+type app struct {
+	status protocol.AppStatus
+	// top is what Argo CD manages for the app.
+	top []objKey
+	// since opens the window of problems: when the app last left Healthy,
+	// so that a rollout does not show the warnings of an earlier one. Zero
+	// when the agent did not see it leave.
+	since time.Time
+}
+
 func NewWatcher(k *kube.Clients, namespace string, log *slog.Logger) *Watcher {
-	return &Watcher{k: k, namespace: namespace, log: log, apps: map[string]protocol.AppStatus{}}
+	return &Watcher{k: k, namespace: namespace, log: log, apps: map[string]app{}}
 }
 
 // Run waits until the Application CRD exists (it does not before setup),
-// then watches Applications until ctx is done.
+// then watches Applications and the objects they make until ctx is done.
 func (w *Watcher) Run(ctx context.Context) {
 	if !w.waitForCRD(ctx) {
 		return
 	}
+	handler := cache.ResourceEventHandlerFuncs{
+		AddFunc:    w.objectChanged,
+		UpdateFunc: func(_, obj any) { w.objectChanged(obj) },
+		DeleteFunc: w.objectChanged,
+	}
+	objFactory := informers.NewSharedInformerFactory(w.k.Kube, 0)
+	eventFactory := informers.NewSharedInformerFactoryWithOptions(w.k.Kube, 0,
+		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.FieldSelector = "type=Warning" }))
+	owned := map[string]cache.SharedIndexInformer{
+		"ReplicaSet": objFactory.Apps().V1().ReplicaSets().Informer(),
+		"Job":        objFactory.Batch().V1().Jobs().Informer(),
+		"Pod":        objFactory.Core().V1().Pods().Informer(),
+	}
+	warned := eventFactory.Core().V1().Events().Informer()
+	x := &indexes{owned: map[string]cache.Indexer{}, warned: warned.GetIndexer()}
+	synced := []cache.InformerSynced{warned.HasSynced}
+	for kind, inf := range owned {
+		_ = inf.AddIndexers(cache.Indexers{ownerIndex: byOwner})
+		_, _ = inf.AddEventHandler(handler)
+		x.owned[kind] = inf.GetIndexer()
+		synced = append(synced, inf.HasSynced)
+	}
+	_ = warned.AddIndexers(cache.Indexers{involvedIndex: byInvolved})
+	_, _ = warned.AddEventHandler(handler)
+	w.objects = x
+	objFactory.Start(ctx.Done())
+	eventFactory.Start(ctx.Done())
+	defer objFactory.Shutdown()
+	defer eventFactory.Shutdown()
+	// Objects first: an Application reads its problems from them when it arrives.
+	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
+		return
+	}
+
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(w.k.Dynamic, 0, w.namespace,
 		func(o *metav1.ListOptions) { o.LabelSelector = ManagedLabel })
 	inf := factory.ForResource(kube.ApplicationGVR).Informer()
@@ -100,7 +151,7 @@ func (w *Watcher) Snapshot() protocol.AppsSnapshot {
 	defer w.mu.RUnlock()
 	apps := make([]protocol.AppStatus, 0, len(w.apps))
 	for _, a := range w.apps {
-		apps = append(apps, a)
+		apps = append(apps, a.status)
 	}
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
 	return protocol.AppsSnapshot{Watching: w.watching, Apps: apps}
@@ -111,13 +162,85 @@ func (w *Watcher) upsert(obj any) {
 	if !ok {
 		return
 	}
-	s := project(u)
+	a := app{status: project(u), top: managed(u)}
 	w.mu.Lock()
-	prev, existed := w.apps[s.Name]
-	w.apps[s.Name] = s
-	notify := w.watching && (!existed || prev != s)
+	prev, existed := w.apps[a.status.Name]
+	switch {
+	case a.status.Health == "Healthy":
+	case !existed:
+	case prev.status.Health != "Healthy":
+		a.since = prev.since
+	default: // it leaves Healthy now
+		a.since = time.Now()
+		if t, err := time.Parse(time.RFC3339, str(u, "status", "health", "lastTransitionTime")); err == nil {
+			a.since = t
+		}
+		a.since = a.since.Add(-eventSlack)
+	}
+	// Under the lock, so that an object event cannot store older problems.
+	a.status.Problems = w.problems(a)
+	changed := w.put(a)
 	w.mu.Unlock()
-	if notify && w.OnChange != nil {
+	w.notify(changed, a.status)
+}
+
+// objectChanged updates the problems of the apps in the object's namespace.
+func (w *Watcher) objectChanged(obj any) {
+	ns := ""
+	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		ns, _, _ = cache.SplitMetaNamespaceKey(d.Key)
+	} else if m, err := meta.Accessor(obj); err == nil {
+		ns = m.GetNamespace()
+	}
+	var changed []protocol.AppStatus
+	w.mu.Lock()
+	for _, a := range w.apps {
+		if !a.in(ns) {
+			continue
+		}
+		a.status.Problems = w.problems(a)
+		if w.put(a) {
+			changed = append(changed, a.status)
+		}
+	}
+	w.mu.Unlock()
+	for _, s := range changed {
+		w.notify(true, s)
+	}
+}
+
+// in reports whether the app has objects in namespace.
+func (a app) in(namespace string) bool {
+	if a.status.Namespace == namespace {
+		return true
+	}
+	for _, k := range a.top {
+		if k.Namespace == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+// problems are read only while the app is not Healthy: once it is, they
+// are over.
+func (w *Watcher) problems(a app) string {
+	if a.status.Health == "Healthy" || w.objects == nil {
+		return ""
+	}
+	return appProblems(w.objects, a.top, a.since)
+}
+
+// put saves a and reports whether the backend should hear about it. Called
+// with w.mu held.
+func (w *Watcher) put(a app) bool {
+	prev, existed := w.apps[a.status.Name]
+	w.apps[a.status.Name] = a
+	return w.watching && (!existed || prev.status != a.status)
+}
+
+func (w *Watcher) notify(changed bool, s protocol.AppStatus) {
+	if changed && w.OnChange != nil {
 		w.OnChange(protocol.AppsChanged{App: s})
 	}
 }
@@ -136,24 +259,41 @@ func (w *Watcher) remove(obj any) {
 	notify := w.watching && existed
 	w.mu.Unlock()
 	if notify && w.OnChange != nil {
-		w.OnChange(protocol.AppsChanged{App: prev, Deleted: true})
+		w.OnChange(protocol.AppsChanged{App: prev.status, Deleted: true})
 	}
+}
+
+func str(u *unstructured.Unstructured, path ...string) string {
+	v, _, _ := unstructured.NestedString(u.Object, path...)
+	return v
+}
+
+// managed lists what Argo CD manages for the app.
+func managed(u *unstructured.Unstructured) []objKey {
+	res, _, _ := unstructured.NestedSlice(u.Object, "status", "resources")
+	var out []objKey
+	for _, r := range res {
+		m, _ := r.(map[string]any)
+		kind, _ := m["kind"].(string)
+		name, _ := m["name"].(string)
+		ns, _ := m["namespace"].(string)
+		if kind != "" && name != "" {
+			out = append(out, objKey{ns, kind, name})
+		}
+	}
+	return out
 }
 
 // project keeps only the fields Ladder shows, so that Argo CD's frequent
 // status writes (reconciledAt and so on) do not produce events.
 func project(u *unstructured.Unstructured) protocol.AppStatus {
-	str := func(path ...string) string {
-		v, _, _ := unstructured.NestedString(u.Object, path...)
-		return v
-	}
 	s := protocol.AppStatus{
 		Name:           u.GetName(),
-		Namespace:      str("spec", "destination", "namespace"),
-		Sync:           str("status", "sync", "status"),
-		Health:         str("status", "health", "status"),
-		Revision:       str("status", "sync", "revision"),
-		OperationPhase: str("status", "operationState", "phase"),
+		Namespace:      str(u, "spec", "destination", "namespace"),
+		Sync:           str(u, "status", "sync", "status"),
+		Health:         str(u, "status", "health", "status"),
+		Revision:       str(u, "status", "sync", "revision"),
+		OperationPhase: str(u, "status", "operationState", "phase"),
 	}
 	if s.Revision == "" {
 		// Multi-source Applications (chart + values ref) report one revision per source.

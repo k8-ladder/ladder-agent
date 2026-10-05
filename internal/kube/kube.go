@@ -23,7 +23,10 @@ import (
 // FieldManager is the server-side apply field manager of the agent.
 const FieldManager = "ladder-agent"
 
-var ApplicationGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+var (
+	ApplicationGVR    = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	ApplicationSetGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+)
 
 type Clients struct {
 	Config  *rest.Config

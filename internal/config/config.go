@@ -29,8 +29,9 @@ type Config struct {
 	// outside the cluster with kubectl port-forward.
 	GiteaURL string
 
-	HealthAddr string
-	LogLevel   string
+	// HTTPAddr serves /healthz and Gitea's push webhook.
+	HTTPAddr string
+	LogLevel string
 }
 
 func Load() (Config, error) {
@@ -44,7 +45,7 @@ func Load() (Config, error) {
 		ArgoCDChartRepo:    env("ARGOCD_CHART_REPO", "https://argoproj.github.io/argo-helm"),
 		GiteaImage:         env("GITEA_IMAGE", "gitea/gitea:1.27.3-rootless"),
 		GiteaURL:           os.Getenv("LADDER_GITEA_URL"),
-		HealthAddr:         env("HEALTH_ADDR", ":8081"),
+		HTTPAddr:           env("HTTP_ADDR", ":8081"),
 		LogLevel:           env("LOG_LEVEL", "info"),
 	}
 	if c.BackendURL == "" {

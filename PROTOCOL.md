@@ -104,5 +104,23 @@ one of `pending`, `running`, `done`, `skipped` (for example, Argo CD install whe
 (destination), `sync`, `health`, `revision`, `operationPhase` and `message`. `message` is what
 Argo CD reports as wrong, one problem per line: conditions whose type ends in `Error`
 (`ComparisonError`, `SyncError`, ...) and the message of a sync operation that failed or is being
-retried. It is empty when nothing is wrong. An app that exists in git but has no Application is
-the backend's to show as `Missing`.
+retried. It is empty when nothing is wrong. `problems` is what Kubernetes reports as wrong with the app's
+objects, of any kind, one per line, oldest first, such as `Pod web-7d9f: FailedScheduling: 0/1
+nodes are available: 1 Insufficient cpu.` It holds the Warning events of the app's tree: what
+Argo CD manages for the app (`status.resources`) and what those objects own, followed through
+ReplicaSets, Jobs and Pods. Objects of one kind with the same problem share a line. A container
+waiting to restart adds how it last exited, such as `OOMKilled`, which no event says. Problems
+are read only while the app is not `Healthy`, and only from events seen since it last left
+`Healthy`, so a rollout does not show the warnings of an earlier one. Argo CD shows these
+problems only in its resource tree, not in the Application. An app that exists in git but has no
+Application is the backend's to show as `Missing`.
+
+## Push webhook
+
+Gitea posts pushes to `http://ladder-agent.<namespace>.svc/hooks/git` (Service `ladder-agent`,
+port `http`). The agent checks `X-Gitea-Signature` against `webhook-secret` in Secret
+`ladder-git/ladder-git-admin`. On a push to `main` it annotates every ApplicationSet with
+`argocd.argoproj.io/application-set-refresh` and every Application with
+`argocd.argoproj.io/refresh`, so Argo CD reads git at once instead of at its next poll, about 3
+minutes later. Gitea's webhook settings allow only this host. The agent creates the webhook during
+setup, and on start when setup is already done.

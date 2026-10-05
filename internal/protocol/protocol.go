@@ -145,6 +145,10 @@ type AppStatus struct {
 	// Message is Argo CD's error, if any: error conditions and a sync
 	// operation that failed or is being retried. Lines are separated by "\n".
 	Message string `json:"message,omitempty"`
+	// Problems is what Kubernetes reports as wrong with the app's objects
+	// while the app is not Healthy: the Warning events of what Argo CD
+	// manages for it and of what those own, one per line, oldest first.
+	Problems string `json:"problems,omitempty"`
 }
 
 // AppsSnapshot answers apps.status and is pushed as apps.snapshot.

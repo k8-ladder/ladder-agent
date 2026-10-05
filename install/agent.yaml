@@ -62,9 +62,9 @@ spec:
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
           ports:
-            - {name: health, containerPort: 8081}
+            - {name: http, containerPort: 8081}
           livenessProbe:
-            httpGet: {path: /healthz, port: health}
+            httpGet: {path: /healthz, port: http}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {memory: 256Mi}
@@ -77,3 +77,16 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+---
+# Gitea posts pushes here (POST /hooks/git), and the agent has Argo CD read
+# git at once instead of at its next poll.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ladder-agent
+  namespace: ladder
+  labels: {app.kubernetes.io/name: ladder-agent}
+spec:
+  selector: {app.kubernetes.io/name: ladder-agent}
+  ports:
+    - {name: http, port: 80, targetPort: http}
