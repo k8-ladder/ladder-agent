@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,9 +167,46 @@ func project(u *unstructured.Unstructured) protocol.AppStatus {
 	if s.Health == "" {
 		s.Health = "Unknown"
 	}
-	switch s.OperationPhase {
-	case "Failed", "Error":
-		s.Message = str("status", "operationState", "message")
-	}
+	s.Message = errorMessage(u)
 	return s
+}
+
+// errorMessage is what Argo CD reports as wrong with the app: its error
+// conditions (ComparisonError, SyncError and so on) and a sync operation that
+// failed or is being retried. Empty when nothing is wrong.
+func errorMessage(u *unstructured.Unstructured) string {
+	var msgs []string
+	// A SyncError repeats the operation's message with a prefix: keep the longer one.
+	add := func(m string) {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			return
+		}
+		for i, prev := range msgs {
+			if strings.Contains(prev, m) {
+				return
+			}
+			if strings.Contains(m, prev) {
+				msgs[i] = m
+				return
+			}
+		}
+		msgs = append(msgs, m)
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		m, _ := c.(map[string]any)
+		// Argo CD's own rule: a condition is an error if its type ends in "Error".
+		if t, _ := m["type"].(string); strings.HasSuffix(t, "Error") {
+			msg, _ := m["message"].(string)
+			add(msg)
+		}
+	}
+	phase, _, _ := unstructured.NestedString(u.Object, "status", "operationState", "phase")
+	retries, _, _ := unstructured.NestedInt64(u.Object, "status", "operationState", "retryCount")
+	if phase == "Failed" || phase == "Error" || (phase == "Running" && retries > 0) {
+		msg, _, _ := unstructured.NestedString(u.Object, "status", "operationState", "message")
+		add(msg)
+	}
+	return strings.Join(msgs, "\n")
 }

@@ -7,11 +7,13 @@ spec:
   description: Apps managed through Ladder
   sourceRepos:
     - [[ .RepoURL ]]
-  # Any namespace except the platform ones; only namespaced kinds.
+  # Any namespace except the platform ones. Of cluster-wide kinds only
+  # Namespace, which CreateNamespace=true in ApplicationSet "apps" needs.
   destinations:
     - {server: https://kubernetes.default.svc, namespace: "![[ .ArgoCDNamespace ]]"}
     - {server: https://kubernetes.default.svc, namespace: "!ladder"}
     - {server: https://kubernetes.default.svc, namespace: "!ladder-git"}
     - {server: https://kubernetes.default.svc, namespace: "!kube-*"}
     - {server: https://kubernetes.default.svc, namespace: "*"}
-  clusterResourceWhitelist: []
+  clusterResourceWhitelist:
+    - {group: "", kind: Namespace}

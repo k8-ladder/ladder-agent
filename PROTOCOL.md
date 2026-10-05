@@ -101,5 +101,8 @@ one of `pending`, `running`, `done`, `skipped` (for example, Argo CD install whe
 (on failure: pod problems, warning events or Application conditions).
 
 `AppStatus` covers Applications with label `ladder.dev/managed=true`: `name`, `namespace`
-(destination), `sync`, `health`, `revision`, `operationPhase` and `message`. An app that exists in
-git but has no Application is the backend's to show as `Missing`.
+(destination), `sync`, `health`, `revision`, `operationPhase` and `message`. `message` is what
+Argo CD reports as wrong, one problem per line: conditions whose type ends in `Error`
+(`ComparisonError`, `SyncError`, ...) and the message of a sync operation that failed or is being
+retried. It is empty when nothing is wrong. An app that exists in git but has no Application is
+the backend's to show as `Missing`.

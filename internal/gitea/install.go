@@ -138,7 +138,7 @@ func (i *Installer) Install(ctx context.Context, repo string) error {
 	if err := c.EnsureUser(ctx, ReaderUser, creds.ReaderPassword, ReaderUser+"@ladder.local"); err != nil {
 		return fmt.Errorf("create user %s: %w", ReaderUser, err)
 	}
-	if err := c.EnsureRepo(ctx, repo); err != nil {
+	if err := c.EnsureRepo(ctx, Owner, repo); err != nil {
 		return fmt.Errorf("create repository: %w", err)
 	}
 	if err := c.AddCollaborator(ctx, Owner, repo, ReaderUser, "read"); err != nil {

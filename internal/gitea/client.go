@@ -122,16 +122,17 @@ func (c *Client) EnsureUser(ctx context.Context, name, password, email string) e
 	return err
 }
 
-// EnsureRepo creates a private repository of the token's user; an existing one is fine.
-func (c *Client) EnsureRepo(ctx context.Context, name string) error {
+// EnsureRepo creates a public repository of the token's user, owner; an
+// existing one is made public. Public means people clone it without signing in.
+func (c *Client) EnsureRepo(ctx context.Context, owner, name string) error {
 	err := c.do(ctx, http.MethodPost, "/user/repos", map[string]any{
 		"name":           name,
-		"private":        true,
+		"private":        false,
 		"default_branch": "main",
 		"auto_init":      false,
 	}, nil, nil)
 	if isStatus(err, http.StatusConflict) {
-		return nil
+		return c.do(ctx, http.MethodPatch, "/repos/"+owner+"/"+name, map[string]any{"private": false}, nil, nil)
 	}
 	return err
 }
