@@ -179,6 +179,16 @@ type AppStatus struct {
 	// Deleting is true once the Application is being deleted: Argo CD
 	// deletes the app's objects, then the Application.
 	Deleting bool `json:"deleting,omitempty"`
+	// Pods counts the pods of the app's objects. Absent from agents that do
+	// not count them.
+	Pods *Pods `json:"pods,omitempty"`
+}
+
+// Pods are the pods in an app's tree that run or start: not those that
+// finished, such as a Job's, nor those being deleted.
+type Pods struct {
+	Ready int `json:"ready"`
+	Total int `json:"total"`
 }
 
 // AppsSnapshot answers apps.status and is pushed as apps.snapshot.

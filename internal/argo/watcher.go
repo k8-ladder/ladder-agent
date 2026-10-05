@@ -1,6 +1,6 @@
 // Package argo watches Argo CD Applications of Ladder apps and the objects
-// they make, and reports sync and health status and what Kubernetes reports
-// as wrong with those objects.
+// they make, and reports sync and health status, the apps' pods, and what
+// Kubernetes reports as wrong with those objects.
 package argo
 
 import (
@@ -179,12 +179,14 @@ func (w *Watcher) upsert(obj any) {
 	}
 	// Under the lock, so that an object event cannot store older problems.
 	a.status.Problems = w.problems(a)
+	a.status.Pods = w.pods(a)
 	changed := w.put(a)
 	w.mu.Unlock()
 	w.notify(changed, a.status)
 }
 
-// objectChanged updates the problems of the apps in the object's namespace.
+// objectChanged updates the problems and pods of the apps in the object's
+// namespace.
 func (w *Watcher) objectChanged(obj any) {
 	ns := ""
 	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -199,6 +201,7 @@ func (w *Watcher) objectChanged(obj any) {
 			continue
 		}
 		a.status.Problems = w.problems(a)
+		a.status.Pods = w.pods(a)
 		if w.put(a) {
 			changed = append(changed, a.status)
 		}
@@ -231,12 +234,20 @@ func (w *Watcher) problems(a app) string {
 	return appProblems(w.objects, a.top, a.since)
 }
 
+// pods counts the app's pods; nil until the objects are watched.
+func (w *Watcher) pods(a app) *protocol.Pods {
+	if w.objects == nil {
+		return nil
+	}
+	return appPods(w.objects, a.top)
+}
+
 // put saves a and reports whether the backend should hear about it. Called
 // with w.mu held.
 func (w *Watcher) put(a app) bool {
 	prev, existed := w.apps[a.status.Name]
 	w.apps[a.status.Name] = a
-	return w.watching && (!existed || prev.status != a.status)
+	return w.watching && (!existed || !sameStatus(prev.status, a.status))
 }
 
 func (w *Watcher) notify(changed bool, s protocol.AppStatus) {
