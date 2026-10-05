@@ -176,6 +176,9 @@ type AppStatus struct {
 	// while the app is not Healthy: the Warning events of what Argo CD
 	// manages for it and of what those own, one per line, oldest first.
 	Problems string `json:"problems,omitempty"`
+	// Deleting is true once the Application is being deleted: Argo CD
+	// deletes the app's objects, then the Application.
+	Deleting bool `json:"deleting,omitempty"`
 }
 
 // AppsSnapshot answers apps.status and is pushed as apps.snapshot.

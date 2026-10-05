@@ -94,7 +94,7 @@ inside the cluster.
 | `agent.hello` | first message after every connect | `agentVersion`, `clusterID` (UID of `kube-system`), `context`, `kubernetesVersion` |
 | `setup.status` | after connect and on every step change | `SetupStatus` |
 | `apps.snapshot` | after connect, and once the Argo CD watch starts | `AppsSnapshot` (`watching: false` until the Application CRD exists) |
-| `apps.changed` | an Application's sync, health, revision or operation phase changed | `{ app: AppStatus, deleted?: true }` |
+| `apps.changed` | an Application's sync, health, revision, operation phase or deletion changed | `{ app: AppStatus, deleted?: true }` |
 | `agent.upgrade` | an upgrade starts or fails, and after a connect while one is known | `AgentUpgrade`: `state` (`running`, `failed`), `from`, `to`, `image`, `error` |
 
 `SetupStatus.state` is one of `not_started`, `running`, `done` or `failed`. A step's `status` is
@@ -103,10 +103,15 @@ one of `pending`, `running`, `done`, `skipped` (for example, Argo CD install whe
 (on failure: pod problems, warning events or Application conditions).
 
 `AppStatus` covers Applications with label `ladder.dev/managed=true`: `name`, `namespace`
-(destination), `sync`, `health`, `revision`, `operationPhase` and `message`. `message` is what
-Argo CD reports as wrong, one problem per line: conditions whose type ends in `Error`
-(`ComparisonError`, `SyncError`, ...) and the message of a sync operation that failed or is being
-retried. It is empty when nothing is wrong. `problems` is what Kubernetes reports as wrong with the app's
+(destination), `sync`, `health`, `revision`, `operationPhase`, `message` and `deleting`.
+`deleting` is true once the Application has a `deletionTimestamp`: the ApplicationSet deleted it
+because its folder is gone, and its finalizer `resources-finalizer.argocd.argoproj.io` keeps it
+until Argo CD has deleted the app's objects. Then `apps.changed` comes with `deleted: true`.
+`message` is what Argo CD reports as wrong, one problem per line: conditions whose type ends in
+`Error` (`ComparisonError`, `SyncError`, ...) and the message of a sync operation that failed or is
+being retried. It is empty when nothing is wrong. While the Application is being deleted, it holds
+only `DeletionError` conditions: with the app's folder gone, comparing with git fails by design.
+`problems` is what Kubernetes reports as wrong with the app's
 objects, of any kind, one per line, oldest first, such as `Pod web-7d9f: FailedScheduling: 0/1
 nodes are available: 1 Insufficient cpu.` It holds the Warning events of the app's tree: what
 Argo CD manages for the app (`status.resources`) and what those objects own, followed through

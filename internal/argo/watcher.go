@@ -294,6 +294,9 @@ func project(u *unstructured.Unstructured) protocol.AppStatus {
 		Health:         str(u, "status", "health", "status"),
 		Revision:       str(u, "status", "sync", "revision"),
 		OperationPhase: str(u, "status", "operationState", "phase"),
+		// The ApplicationSet deletes the Application of a removed folder, and
+		// its resources finalizer keeps it until Argo CD has deleted the objects.
+		Deleting: u.GetDeletionTimestamp() != nil,
 	}
 	if s.Revision == "" {
 		// Multi-source Applications (chart + values ref) report one revision per source.
@@ -313,8 +316,11 @@ func project(u *unstructured.Unstructured) protocol.AppStatus {
 
 // errorMessage is what Argo CD reports as wrong with the app: its error
 // conditions (ComparisonError, SyncError and so on) and a sync operation that
-// failed or is being retried. Empty when nothing is wrong.
+// failed or is being retried. Empty when nothing is wrong. While the
+// Application is being deleted only a DeletionError counts: its folder is
+// gone, so comparing with git fails by design.
 func errorMessage(u *unstructured.Unstructured) string {
+	deleting := u.GetDeletionTimestamp() != nil
 	var msgs []string
 	// A SyncError repeats the operation's message with a prefix: keep the longer one.
 	add := func(m string) {
@@ -337,10 +343,14 @@ func errorMessage(u *unstructured.Unstructured) string {
 	for _, c := range conds {
 		m, _ := c.(map[string]any)
 		// Argo CD's own rule: a condition is an error if its type ends in "Error".
-		if t, _ := m["type"].(string); strings.HasSuffix(t, "Error") {
+		t, _ := m["type"].(string)
+		if deleting && t == "DeletionError" || !deleting && strings.HasSuffix(t, "Error") {
 			msg, _ := m["message"].(string)
 			add(msg)
 		}
+	}
+	if deleting {
+		return strings.Join(msgs, "\n")
 	}
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "operationState", "phase")
 	retries, _, _ := unstructured.NestedInt64(u.Object, "status", "operationState", "retryCount")
