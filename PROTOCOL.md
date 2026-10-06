@@ -38,6 +38,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 | `git.http` | `GitHTTPRequest` | `GitHTTPResponse`: Gitea's status, content type and body |
 | `argocd.credentials` | none | `{ username, password }` from Secret `argocd-initial-admin-secret` |
 | `agent.upgrade` | `{ version }` | `AgentUpgrade` with `state: running`; see [Upgrade](#upgrade) |
+| `kube.read` | `KubeReadRequest` | `KubeReadResult`: `text` as kubectl prints it; see [Cluster reads](#cluster-reads) |
 
 `SetupPlan`:
 
@@ -86,6 +87,33 @@ inside the cluster.
   the cluster.
 - Gitea's errors come back as a response with their status. A protocol error means the call was
   refused (`bad_request`) or Gitea is not set up yet (`failed_precondition`).
+
+## Cluster reads
+
+`kube.read` lets the cloud's assistant look at the cluster. It only reads: it has no way to
+change, create, delete or exec anything.
+
+```json
+{ "op": "list", "kind": "pods", "namespace": "shop", "labelSelector": "app.kubernetes.io/instance=shop-api" }
+{ "text": "NAME            READY   STATUS             RESTARTS   AGE\nshop-api-7d9f   0/1     ImagePullBackOff   0          6m" }
+```
+
+| `op` | Needs | Text |
+|---|---|---|
+| `list` | `kind`; `namespace` (empty: all namespaces), `labelSelector` | The columns the API server prints for the kind (`kubectl get`), the namespace first for all namespaces; at most 200 rows |
+| `get` | `kind`, `name`; `namespace` for a namespaced kind | The object as YAML (`kubectl get -o yaml`), with its status |
+| `events` | `namespace` (empty: all); `kind` and `name` for one object | Events oldest first, the newest 60: last seen, type, reason, object, message (`kubectl events`) |
+| `logs` | `namespace`, `name` of a pod; `container` (empty: the first), `previous`, `tailLines` (default 100, at most 1000) | The last lines of the container (`kubectl logs`), after a line naming the pod's containers |
+
+- `kind` is a kind, resource or short name as kubectl takes them: `Pod`, `deployments`, `deploy`,
+  `applications.argoproj.io`. A kind the cluster does not serve, a missing object or a bad selector is
+  `bad_request`, with the API server's message.
+- **Secrets stay in the cluster.** `get` of a Secret replaces each value of `data` and `stringData`
+  with `<hidden, N bytes>`. Every object loses `metadata.managedFields` and the annotation
+  `kubectl.kubernetes.io/last-applied-configuration`, which holds a copy of a Secret's values when
+  it was applied with kubectl. `list` prints only the server's columns, which hold no values.
+- `text` is at most 32 KiB; `truncated` is set when it was cut. Logs keep their newest lines.
+- Agents before this method answer `unknown_method`.
 
 ## Events (agent → backend)
 

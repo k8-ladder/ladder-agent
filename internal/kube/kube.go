@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -32,7 +33,9 @@ type Clients struct {
 	Config  *rest.Config
 	Kube    kubernetes.Interface
 	Dynamic dynamic.Interface
-	Mapper  *restmapper.DeferredDiscoveryRESTMapper
+	// Discovery caches what the API server serves; Mapper reads it.
+	Discovery discovery.CachedDiscoveryInterface
+	Mapper    *restmapper.DeferredDiscoveryRESTMapper
 	// Context is the kubeconfig context name, or "in-cluster".
 	Context string
 }
@@ -60,8 +63,9 @@ func New() (*Clients, error) {
 	if err != nil {
 		return nil, err
 	}
-	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(kc.Discovery()))
-	return &Clients{Config: cfg, Kube: kc, Dynamic: dc, Mapper: mapper, Context: contextName}, nil
+	disc := memory.NewMemCacheClient(kc.Discovery())
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(disc)
+	return &Clients{Config: cfg, Kube: kc, Dynamic: dc, Discovery: disc, Mapper: mapper, Context: contextName}, nil
 }
 
 // HasResource reports whether the API server serves the resource, using
