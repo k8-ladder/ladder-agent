@@ -166,6 +166,20 @@ func run() error {
 		}
 		return reader.Read(ctx, req)
 	})
+	be.Handle(protocol.MethodAppEvents, func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var req protocol.AppEventsRequest
+		if err := decode(raw, &req); err != nil {
+			return nil, err
+		}
+		return watcher.Events(ctx, req.App)
+	})
+	be.Handle(protocol.MethodAppLogs, func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var req protocol.AppLogsRequest
+		if err := decode(raw, &req); err != nil {
+			return nil, err
+		}
+		return watcher.Logs(ctx, req)
+	})
 	be.Handle(protocol.MethodAgentUpgrade, func(reqCtx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.AgentUpgradeRequest
 		if err := decode(raw, &req); err != nil {

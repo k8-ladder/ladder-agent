@@ -3,6 +3,8 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +22,19 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
 )
+
+// LogsError is the error of a refused read of a pod's logs, with what the API
+// server says, such as `previous terminated container "app" in pod "web-1"
+// not found`. client-go reads that only from a text body, and for the Status
+// the API server sends says "the server rejected our request for an unknown
+// reason". body is what the read returned.
+func LogsError(err error, body []byte) error {
+	var st metav1.Status
+	if err != nil && json.Unmarshal(body, &st) == nil && st.Message != "" {
+		return errors.New(st.Message)
+	}
+	return err
+}
 
 // FieldManager is the server-side apply field manager of the agent.
 const FieldManager = "ladder-agent"

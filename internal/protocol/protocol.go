@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 type Kind string
@@ -46,6 +47,10 @@ const (
 	// MethodKubeRead reads cluster objects, events and logs for the
 	// assistant. It never changes anything and never returns Secret values.
 	MethodKubeRead = "kube.read"
+	// MethodAppEvents reads the events of one app's objects for its page.
+	MethodAppEvents = "app.events"
+	// MethodAppLogs reads the last lines of one app's pods for its page.
+	MethodAppLogs = "app.logs"
 )
 
 // Events from the agent to the backend.
@@ -344,6 +349,90 @@ type KubeReadResult struct {
 	Text string `json:"text"`
 	// Truncated is true when the text was cut at the size limit (32 KiB).
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// AppEventsRequest is the payload of app.events.
+type AppEventsRequest struct {
+	// App is the name of the app's Application.
+	App string `json:"app"`
+}
+
+// AppEvents answers app.events: the events of the app's Application and of
+// the objects in its tree, newest first.
+type AppEvents struct {
+	Events []AppEvent `json:"events"`
+	// Truncated is true when older events were left out (at most 200).
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// AppEvent is one Kubernetes event about an object of an app.
+type AppEvent struct {
+	Type    string `json:"type"` // Normal or Warning
+	Reason  string `json:"reason"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Message string `json:"message"`
+	// Count is how many times it happened between FirstSeen and LastSeen.
+	Count     int       `json:"count"`
+	FirstSeen time.Time `json:"firstSeen"`
+	LastSeen  time.Time `json:"lastSeen"`
+}
+
+// AppLogsRequest is the payload of app.logs.
+type AppLogsRequest struct {
+	// App is the name of the app's Application.
+	App string `json:"app"`
+	// Pod is one pod of the app; empty reads every pod, the lines merged by time.
+	Pod string `json:"pod,omitempty"`
+	// Container in each pod; empty is the pod's first container.
+	Container string `json:"container,omitempty"`
+	// Previous reads the run before the last restart.
+	Previous bool `json:"previous,omitempty"`
+	// TailLines is how many of the last lines of each pod: default 200, at most 1000.
+	TailLines int `json:"tailLines,omitempty"`
+}
+
+// AppLogs answers app.logs.
+type AppLogs struct {
+	// Pods are the app's pods, newest first, whether their lines were read or not.
+	Pods []AppPod `json:"pods"`
+	// Lines are oldest first.
+	Lines []LogLine `json:"lines"`
+	// Errors say why the lines of a pod could not be read, such as a
+	// container that has not started.
+	Errors []LogError `json:"errors,omitempty"`
+	// Truncated is true when older lines were left out to keep the answer small.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// AppPod is one pod of an app.
+type AppPod struct {
+	Name string `json:"name"`
+	// Status is what kubectl get pods prints: Running, Pending, Completed,
+	// CrashLoopBackOff, ImagePullBackOff, Init:0/1, Terminating and so on.
+	Status         string    `json:"status"`
+	Ready          bool      `json:"ready"`
+	Restarts       int       `json:"restarts"`
+	Containers     []string  `json:"containers"`
+	InitContainers []string  `json:"initContainers,omitempty"`
+	Node           string    `json:"node,omitempty"`
+	Created        time.Time `json:"created"`
+}
+
+// LogLine is one line a container wrote.
+type LogLine struct {
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+	// Time is when the container wrote it, as the kubelet recorded it.
+	Time time.Time `json:"time"`
+	Text string    `json:"text"`
+}
+
+// LogError says why the lines of a pod's container could not be read.
+type LogError struct {
+	Pod       string `json:"pod"`
+	Container string `json:"container,omitempty"`
+	Message   string `json:"message"`
 }
 
 // ArgoCDCredentials answers argocd.credentials.

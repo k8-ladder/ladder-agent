@@ -59,6 +59,8 @@ func main() {
 	mux.HandleFunc("GET /argocd/credentials", b.forward(protocol.MethodArgoCDCredentials))
 	mux.HandleFunc("POST /git", b.forward(protocol.MethodGitHTTP))
 	mux.HandleFunc("POST /kube", b.forward(protocol.MethodKubeRead))
+	mux.HandleFunc("POST /app/events", b.forward(protocol.MethodAppEvents))
+	mux.HandleFunc("POST /app/logs", b.forward(protocol.MethodAppLogs))
 	log.Printf("fakebe listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }

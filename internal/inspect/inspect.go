@@ -434,7 +434,7 @@ func (r *Reader) logs(ctx context.Context, req protocol.KubeReadRequest) (string
 		Container: container, Previous: req.Previous, TailLines: &tail, LimitBytes: &limit,
 	}).DoRaw(ctx)
 	if err != nil {
-		return "", err
+		return "", kube.LogsError(err, raw)
 	}
 	run := "current run"
 	if req.Previous {

@@ -39,6 +39,8 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 | `argocd.credentials` | none | `{ username, password }` from Secret `argocd-initial-admin-secret` |
 | `agent.upgrade` | `{ version }` | `AgentUpgrade` with `state: running`; see [Upgrade](#upgrade) |
 | `kube.read` | `KubeReadRequest` | `KubeReadResult`: `text` as kubectl prints it; see [Cluster reads](#cluster-reads) |
+| `app.events` | `{ app }` | `AppEvents`: the events of one app's objects; see [App events and logs](#app-events-and-logs) |
+| `app.logs` | `AppLogsRequest` | `AppLogs`: the app's pods and their last lines; see [App events and logs](#app-events-and-logs) |
 
 `SetupPlan`:
 
@@ -114,6 +116,52 @@ change, create, delete or exec anything.
   it was applied with kubectl. `list` prints only the server's columns, which hold no values.
 - `text` is at most 32 KiB; `truncated` is set when it was cut. Logs keep their newest lines.
 - Agents before this method answer `unknown_method`.
+
+## App events and logs
+
+`app.events` and `app.logs` feed the Events and Logs tabs of the app page. Unlike `kube.read`
+they answer in fields, not text, and reach only the objects of one app: its Application (`app` is
+its name) and the app's tree, the same as for `problems` below. Both only read.
+
+```json
+{ "app": "shop-api" }
+{ "events": [ { "type": "Warning", "reason": "BackOff", "kind": "Pod", "name": "shop-api-7d9f8-x2kqp",
+    "message": "Back-off restarting failed container web", "count": 7,
+    "firstSeen": "2026-10-06T12:30:00Z", "lastSeen": "2026-10-06T12:39:00Z" } ] }
+```
+
+- `app.events` returns the events, Normal and Warning, of the Application (Argo CD's syncs and
+  changes of health) and of every object in the tree, newest first, at most 200 (`truncated` when
+  there were more). A pod that left the tree, such as one a finished rollout deleted, still counts
+  while its events last: a pod whose name is that of a ReplicaSet, Job or DaemonSet of the tree and
+  the five characters they add. `count` is how many times it happened between `firstSeen` and
+  `lastSeen`. Kubernetes keeps events for about an hour.
+
+```json
+{ "app": "shop-api", "pod": "", "container": "", "previous": false, "tailLines": 200 }
+{ "pods": [ { "name": "shop-api-7d9f8-x2kqp", "status": "CrashLoopBackOff", "ready": false, "restarts": 7,
+    "containers": ["web"], "node": "k3d-dev-server-0", "created": "2026-10-06T12:29:58Z" } ],
+  "lines": [ { "pod": "shop-api-7d9f8-x2kqp", "container": "web", "time": "2026-10-06T12:39:01.5Z",
+    "text": "Error: DATABASE_URL is not set" } ],
+  "errors": [ { "pod": "shop-api-7d9f8-q8z2n", "container": "web",
+    "message": "container \"web\" in pod \"shop-api-7d9f8-q8z2n\" is waiting to start: ContainerCreating" } ] }
+```
+
+- `pods` are the pods of the tree, newest first, including those that finished or are being
+  deleted. `status` is the STATUS column of `kubectl get pods`; `restarts` counts every container.
+- `lines` are the last `tailLines` lines of each container read (default 200, at most 1000), oldest
+  first, with the time the kubelet recorded for each. With `pod` they are that pod's; without it,
+  those of the 10 newest pods, merged by time. `container` empty is each pod's first container; with
+  `pod` it may also be an init container, without it pods that lack the container are skipped.
+  `previous` reads the run before the last restart, and without `pod` skips the pods whose container
+  never restarted.
+- `errors` names the containers whose lines the API server refused to read, with its message, such
+  as a container that has not started.
+- A container's read stops at 1 MiB and all lines at 2 MiB, keeping the newest; `truncated` says
+  that lines were left out.
+- Errors: `failed_precondition` while Argo CD has no Application of that name or the agent does not
+  watch Argo CD yet; `bad_request` for a pod that is not the app's or a container its pod lacks.
+  Agents before these methods answer `unknown_method`.
 
 ## Events (agent → backend)
 

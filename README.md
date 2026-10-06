@@ -50,6 +50,8 @@ curl localhost:9000/apps
 curl localhost:9000/argocd/credentials
 curl -X POST localhost:9000/git -d '{"method":"GET","path":"/api/v1/repos/ladder/deploy/contents/ladder.yaml"}'
 curl -X POST localhost:9000/kube -d '{"op":"events","namespace":"argocd"}'
+curl -X POST localhost:9000/app/events -d '{"app":"shop-api"}'
+curl -X POST localhost:9000/app/logs -d '{"app":"shop-api","tailLines":50}'
 
 make reset             # remove Argo CD, Gitea and setup state, restart the agent
 ```
