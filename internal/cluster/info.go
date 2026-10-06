@@ -126,7 +126,10 @@ func (i *Inspector) ArgoCD(ctx context.Context) (*protocol.ArgoCDInfo, error) {
 	d := deps.Items[0]
 	out.Found = true
 	out.Namespace = d.Namespace
-	out.Address = i.ingressAddress(ctx, d.Namespace)
+	out.Addresses = i.ingressAddresses(ctx, d.Namespace)
+	if len(out.Addresses) > 0 {
+		out.Address = out.Addresses[0]
+	}
 	out.Version = d.Labels["app.kubernetes.io/version"]
 	if out.Version == "" && len(d.Spec.Template.Spec.Containers) > 0 {
 		img := d.Spec.Template.Spec.Containers[0].Image
@@ -137,22 +140,14 @@ func (i *Inspector) ArgoCD(ctx context.Context) (*protocol.ArgoCDInfo, error) {
 	return out, nil
 }
 
-// ingressAddress is the address the ingress controller reported for Ingress
-// argocd-server, or "" while there is none.
-func (i *Inspector) ingressAddress(ctx context.Context, namespace string) string {
+// ingressAddresses are the addresses the ingress controller reported for
+// Ingress argocd-server, none while there are none.
+func (i *Inspector) ingressAddresses(ctx context.Context, namespace string) []string {
 	ing, err := i.k.Kube.NetworkingV1().Ingresses(namespace).Get(ctx, "argocd-server", metav1.GetOptions{})
 	if err != nil {
-		return ""
+		return nil
 	}
-	for _, lb := range ing.Status.LoadBalancer.Ingress {
-		if lb.Hostname != "" {
-			return lb.Hostname
-		}
-		if lb.IP != "" {
-			return lb.IP
-		}
-	}
-	return ""
+	return kube.IngressAddresses(ing)
 }
 
 // HasDefaultStorageClass reports whether PVCs without a class get a volume.

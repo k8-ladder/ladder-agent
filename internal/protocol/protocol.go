@@ -166,6 +166,10 @@ type ArgoCDInfo struct {
 	// Address is the IP or host name in the status of Ingress argocd-server,
 	// once the ingress controller has set it.
 	Address string `json:"address,omitempty"`
+	// Addresses are all of them, Address first: the default ingress class's
+	// addresses, where app hosts point. With k3s's servicelb, one per node.
+	// Absent from agents that report only Address.
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // AppStatus is the Argo CD view of one Ladder app (an Application with
@@ -190,6 +194,18 @@ type AppStatus struct {
 	// Pods counts the pods of the app's objects. Absent from agents that do
 	// not count them.
 	Pods *Pods `json:"pods,omitempty"`
+	// Ingresses are the app's Ingresses, by name. Absent from agents that do
+	// not read them, and for an app without one.
+	Ingresses []Ingress `json:"ingresses,omitempty"`
+}
+
+// Ingress is one Ingress that Argo CD manages for an app.
+type Ingress struct {
+	Name  string   `json:"name"`
+	Hosts []string `json:"hosts"`
+	// Addresses are the IPs and host names in the Ingress's status, which
+	// the ingress controller sets; empty until it has.
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // Pods are the pods in an app's tree that run or start: not those that

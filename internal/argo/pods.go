@@ -1,6 +1,8 @@
 package argo
 
 import (
+	"reflect"
+
 	"github.com/ladder/ladder-agent/internal/protocol"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -28,9 +30,7 @@ func appPods(o objects, top []objKey) *protocol.Pods {
 	return n
 }
 
-// sameStatus compares statuses by value, pods included.
+// sameStatus compares statuses by value, pods and Ingresses included.
 func sameStatus(a, b protocol.AppStatus) bool {
-	ap, bp := a.Pods, b.Pods
-	a.Pods, b.Pods = nil, nil
-	return a == b && (ap == nil) == (bp == nil) && (ap == nil || *ap == *bp)
+	return reflect.DeepEqual(a, b)
 }

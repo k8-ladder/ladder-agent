@@ -29,7 +29,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 
 | Method | Payload | Result |
 |---|---|---|
-| `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable/requested/free, storage classes, `setupAccess`, Argo CD detection with the Ingress `address`, `warnings` |
+| `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable/requested/free, storage classes, `setupAccess`, Argo CD detection with its Ingress's `address` and all its `addresses`, `warnings` |
 | `apps.status` | none | `AppsSnapshot` |
 | `setup.plan` | `SetupPlan` without `files` | `SetupPlanResult`: `repoURL`, Argo CD settings with defaults filled in, steps, cluster objects. No side effects. |
 | `setup.apply` | `SetupPlan` with `files` | `SetupStatus`; setup continues in the background |
@@ -170,7 +170,7 @@ its name) and the app's tree, the same as for `problems` below. Both only read.
 | `agent.hello` | first message after every connect | `agentVersion`, `clusterID` (UID of `kube-system`), `context`, `kubernetesVersion` |
 | `setup.status` | after connect and on every step change | `SetupStatus` |
 | `apps.snapshot` | after connect, and once the Argo CD watch starts | `AppsSnapshot` (`watching: false` until the Application CRD exists) |
-| `apps.changed` | an Application's sync, health, revision, operation phase, deletion, problems or pods changed | `{ app: AppStatus, deleted?: true }` |
+| `apps.changed` | an Application's sync, health, revision, operation phase, deletion, problems, pods or Ingresses changed | `{ app: AppStatus, deleted?: true }` |
 | `agent.upgrade` | an upgrade starts or fails, and after a connect while one is known | `AgentUpgrade`: `state` (`running`, `failed`), `from`, `to`, `image`, `error` |
 
 `SetupStatus.state` is one of `not_started`, `running`, `done` or `failed`. A step's `status` is
@@ -179,8 +179,8 @@ one of `pending`, `running`, `done`, `skipped` (for example, Argo CD install whe
 (on failure: pod problems, warning events or Application conditions).
 
 `AppStatus` covers Applications with label `ladder.dev/managed=true`: `name`, `namespace`
-(destination), `sync`, `health`, `revision`, `operationPhase`, `message`, `problems`, `deleting`
-and `pods`.
+(destination), `sync`, `health`, `revision`, `operationPhase`, `message`, `problems`, `deleting`,
+`pods` and `ingresses`.
 `deleting` is true once the Application has a `deletionTimestamp`: the ApplicationSet deleted it
 because its folder is gone, and its finalizer `resources-finalizer.argocd.argoproj.io` keeps it
 until Argo CD has deleted the app's objects. Then `apps.changed` comes with `deleted: true`.
@@ -199,7 +199,14 @@ are read only while the app is not `Healthy`, and only from events seen since it
 problems only in its resource tree, not in the Application. `pods` is `{ ready, total }`: the pods
 in the same tree that run or start, and how many of them are ready. Pods that finished, such as a
 Job's, and pods being deleted, such as those of a rollout's old ReplicaSet, do not count. Agents
-before this field leave it out. An app that exists in git but has no Application is the backend's
+before this field leave it out.
+`ingresses` are the Ingresses Argo CD manages for the app (`status.resources`), by name:
+`{ name, hosts, addresses }`, where `hosts` are those of the rules and `addresses` the IPs and host
+names in the Ingress's `status.loadBalancer.ingress`, which the ingress controller sets; absent
+until it has. A change of either sends `apps.changed`. The cloud tells people where to point the
+hosts in DNS from them. Absent for an app without an Ingress and from agents before this field;
+the cloud then falls back to `cluster.info`'s `argocd.addresses`, those of the default ingress
+class, and to `argocd.address` from agents before that. An app that exists in git but has no Application is the backend's
 to show as `Missing`.
 
 ## Upgrade
