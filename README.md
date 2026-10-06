@@ -11,7 +11,10 @@ and does everything that touches Kubernetes:
   `ladder-setup-state`, so a restarted pod resumes;
 - **Gitea proxy:** `git.http` forwards the cloud's calls to the Gitea API of the repository and adds
   the token, which never leaves the cluster;
-- **Argo CD credentials:** the initial admin password, on request.
+- **Argo CD credentials:** the initial admin password, on request;
+- **cluster reads for the assistant:** `kube.read` lists objects as `kubectl get` does, prints one
+  as YAML, and reads events and pod logs. It never changes anything, and hides the values of
+  Secrets.
 
 Git hosting, YAML edits and the API for the UI belong to `ladder-be`. The wire contract is in
 [PROTOCOL.md](PROTOCOL.md).
@@ -26,6 +29,7 @@ Git hosting, YAML edits and the API for the UI belong to `ladder-be`. The wire c
 | `internal/link` | WebSocket client: reconnect, request dispatch, events |
 | `internal/cluster` | cluster facts |
 | `internal/argo` | Application watcher |
+| `internal/inspect` | `kube.read`: objects, events and logs for the assistant |
 | `internal/setup` | setup engine, steps, state |
 | `internal/gitea` | Gitea manifests and API client |
 | `internal/helmx` | Helm SDK wrapper |
@@ -45,6 +49,7 @@ curl localhost:9000/setup/status        # fakebe also prints every step change
 curl localhost:9000/apps
 curl localhost:9000/argocd/credentials
 curl -X POST localhost:9000/git -d '{"method":"GET","path":"/api/v1/repos/ladder/deploy/contents/ladder.yaml"}'
+curl -X POST localhost:9000/kube -d '{"op":"events","namespace":"argocd"}'
 
 make reset             # remove Argo CD, Gitea and setup state, restart the agent
 ```

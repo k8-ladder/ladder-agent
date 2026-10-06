@@ -9,6 +9,7 @@
 //	curl localhost:9000/setup/status
 //	curl -X POST localhost:9000/setup/retry
 //	curl localhost:9000/argocd/credentials
+//	curl -X POST localhost:9000/kube -d '{"op":"list","kind":"pods","namespace":"argocd"}'
 //	curl -X POST localhost:9000/git -d '{"method":"GET","path":"/api/v1/repos/ladder/deploy/contents/ladder.yaml"}'
 //
 // For setup.apply it renders a minimal starter repository from ./starter.
@@ -57,6 +58,7 @@ func main() {
 	mux.HandleFunc("POST /setup/apply", b.apply)
 	mux.HandleFunc("GET /argocd/credentials", b.forward(protocol.MethodArgoCDCredentials))
 	mux.HandleFunc("POST /git", b.forward(protocol.MethodGitHTTP))
+	mux.HandleFunc("POST /kube", b.forward(protocol.MethodKubeRead))
 	log.Printf("fakebe listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }

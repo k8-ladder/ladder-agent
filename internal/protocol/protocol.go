@@ -43,6 +43,9 @@ const (
 	MethodArgoCDCredentials = "argocd.credentials"
 	// MethodAgentUpgrade replaces the agent with another version of its image.
 	MethodAgentUpgrade = "agent.upgrade"
+	// MethodKubeRead reads cluster objects, events and logs for the
+	// assistant. It never changes anything and never returns Secret values.
+	MethodKubeRead = "kube.read"
 )
 
 // Events from the agent to the backend.
@@ -305,6 +308,42 @@ type GitHTTPResponse struct {
 	Status      int    `json:"status"`
 	ContentType string `json:"contentType,omitempty"`
 	Body        []byte `json:"body,omitempty"`
+}
+
+// Operations of kube.read.
+const (
+	KubeList   = "list"
+	KubeGet    = "get"
+	KubeEvents = "events"
+	KubeLogs   = "logs"
+)
+
+// KubeReadRequest is the payload of kube.read: one look at the cluster, as
+// kubectl get, kubectl get -o yaml, kubectl events and kubectl logs show it.
+type KubeReadRequest struct {
+	Op string `json:"op"`
+	// Kind is a kind, resource or short name as kubectl takes them: Pod,
+	// deployments, deploy, applications.argoproj.io. Required for list and
+	// get; for events it narrows them to one object with Name.
+	Kind string `json:"kind,omitempty"`
+	// Namespace is empty for all namespaces (list, events) and for
+	// cluster-scoped objects.
+	Namespace     string `json:"namespace,omitempty"`
+	Name          string `json:"name,omitempty"`
+	LabelSelector string `json:"labelSelector,omitempty"`
+	// Container, Previous and TailLines are for logs: the container of the
+	// pod Name (empty: its first), the previous run of a restarted one, and
+	// how many of the last lines (default 100, at most 1000).
+	Container string `json:"container,omitempty"`
+	Previous  bool   `json:"previous,omitempty"`
+	TailLines int    `json:"tailLines,omitempty"`
+}
+
+// KubeReadResult answers kube.read with text as kubectl prints it.
+type KubeReadResult struct {
+	Text string `json:"text"`
+	// Truncated is true when the text was cut at the size limit (32 KiB).
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ArgoCDCredentials answers argocd.credentials.

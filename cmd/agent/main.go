@@ -1,7 +1,8 @@
 // Command agent is ladder-agent: the in-cluster part of Ladder. It dials
 // ladder-be, reports cluster facts and Argo CD status, runs first-run setup,
 // forwards the cloud's calls to the in-cluster Gitea, has Argo CD read git as
-// soon as Gitea reports a push, and replaces itself with a new version.
+// soon as Gitea reports a push, shows the assistant cluster objects, events
+// and logs, and replaces itself with a new version.
 package main
 
 import (
@@ -23,6 +24,7 @@ import (
 	"github.com/ladder/ladder-agent/internal/config"
 	"github.com/ladder/ladder-agent/internal/gitea"
 	"github.com/ladder/ladder-agent/internal/helmx"
+	"github.com/ladder/ladder-agent/internal/inspect"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/link"
 	"github.com/ladder/ladder-agent/internal/protocol"
@@ -155,6 +157,14 @@ func run() error {
 			ns = cfg.ArgoCDNamespace
 		}
 		return argo.InitialCredentials(ctx, k, ns)
+	})
+	reader := inspect.New(k)
+	be.Handle(protocol.MethodKubeRead, func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var req protocol.KubeReadRequest
+		if err := decode(raw, &req); err != nil {
+			return nil, err
+		}
+		return reader.Read(ctx, req)
 	})
 	be.Handle(protocol.MethodAgentUpgrade, func(reqCtx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.AgentUpgradeRequest
