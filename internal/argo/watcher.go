@@ -1,6 +1,6 @@
 // Package argo watches Argo CD Applications of Ladder apps and the objects
-// they make, and reports sync and health status, the apps' pods, and what
-// Kubernetes reports as wrong with those objects.
+// they make, and reports sync and health status, the apps' pods and
+// Ingresses, and what Kubernetes reports as wrong with those objects.
 package argo
 
 import (
@@ -79,8 +79,10 @@ func (w *Watcher) Run(ctx context.Context) {
 		"Pod":        objFactory.Core().V1().Pods().Informer(),
 	}
 	warned := eventFactory.Core().V1().Events().Informer()
-	x := &indexes{owned: map[string]cache.Indexer{}, warned: warned.GetIndexer()}
-	synced := []cache.InformerSynced{warned.HasSynced}
+	ingresses := objFactory.Networking().V1().Ingresses().Informer()
+	_, _ = ingresses.AddEventHandler(handler)
+	x := &indexes{owned: map[string]cache.Indexer{}, warned: warned.GetIndexer(), ingresses: ingresses.GetIndexer()}
+	synced := []cache.InformerSynced{warned.HasSynced, ingresses.HasSynced}
 	for kind, inf := range owned {
 		_ = inf.AddIndexers(cache.Indexers{ownerIndex: byOwner})
 		_, _ = inf.AddEventHandler(handler)
@@ -180,13 +182,14 @@ func (w *Watcher) upsert(obj any) {
 	// Under the lock, so that an object event cannot store older problems.
 	a.status.Problems = w.problems(a)
 	a.status.Pods = w.pods(a)
+	a.status.Ingresses = w.ingresses(a)
 	changed := w.put(a)
 	w.mu.Unlock()
 	w.notify(changed, a.status)
 }
 
-// objectChanged updates the problems and pods of the apps in the object's
-// namespace.
+// objectChanged updates the problems, pods and Ingresses of the apps in the
+// object's namespace.
 func (w *Watcher) objectChanged(obj any) {
 	ns := ""
 	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -202,6 +205,7 @@ func (w *Watcher) objectChanged(obj any) {
 		}
 		a.status.Problems = w.problems(a)
 		a.status.Pods = w.pods(a)
+		a.status.Ingresses = w.ingresses(a)
 		if w.put(a) {
 			changed = append(changed, a.status)
 		}
@@ -240,6 +244,14 @@ func (w *Watcher) pods(a app) *protocol.Pods {
 		return nil
 	}
 	return appPods(w.objects, a.top)
+}
+
+// ingresses are the app's Ingresses; none until the objects are watched.
+func (w *Watcher) ingresses(a app) []protocol.Ingress {
+	if w.objects == nil {
+		return nil
+	}
+	return appIngresses(w.objects, a.top)
 }
 
 // put saves a and reports whether the backend should hear about it. Called

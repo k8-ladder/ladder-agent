@@ -7,23 +7,29 @@ import (
 
 	"github.com/ladder/ladder-agent/internal/protocol"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// fakeObjects is a cluster of owner links, events and pods.
+// fakeObjects is a cluster of owner links, events, pods and Ingresses.
 type fakeObjects struct {
 	owns   map[objKey][]objKey
 	warned map[objKey][]*corev1.Event
 	pods   map[string]*corev1.Pod
+	ings   map[string]*networkingv1.Ingress
 }
 
 func (f *fakeObjects) children(k objKey) []objKey      { return f.owns[k] }
 func (f *fakeObjects) events(k objKey) []*corev1.Event { return f.warned[k] }
 func (f *fakeObjects) pod(ns, name string) *corev1.Pod { return f.pods[ns+"/"+name] }
-func (f *fakeObjects) warn(k objKey, e *corev1.Event)  { f.warned[k] = append(f.warned[k], e) }
+func (f *fakeObjects) ingress(ns, name string) *networkingv1.Ingress {
+	return f.ings[ns+"/"+name]
+}
+func (f *fakeObjects) warn(k objKey, e *corev1.Event) { f.warned[k] = append(f.warned[k], e) }
 func newFakeObjects() *fakeObjects {
-	return &fakeObjects{owns: map[objKey][]objKey{}, warned: map[objKey][]*corev1.Event{}, pods: map[string]*corev1.Pod{}}
+	return &fakeObjects{owns: map[objKey][]objKey{}, warned: map[objKey][]*corev1.Event{}, pods: map[string]*corev1.Pod{},
+		ings: map[string]*networkingv1.Ingress{}}
 }
 
 var t0 = time.Date(2026, 10, 5, 12, 30, 0, 0, time.UTC)

@@ -61,3 +61,16 @@ func TestSameStatus(t *testing.T) {
 		t.Error("other health is the same")
 	}
 }
+
+func TestSameStatusIngresses(t *testing.T) {
+	a := protocol.AppStatus{Name: "web", Ingresses: []protocol.Ingress{{Name: "web", Hosts: []string{"shop.example.com"}}}}
+	b := a
+	b.Ingresses = []protocol.Ingress{{Name: "web", Hosts: []string{"shop.example.com"}}}
+	if !sameStatus(a, b) {
+		t.Error("equal Ingresses in other slices differ")
+	}
+	b.Ingresses = []protocol.Ingress{{Name: "web", Hosts: []string{"shop.example.com"}, Addresses: []string{"203.0.113.10"}}}
+	if sameStatus(a, b) {
+		t.Error("an Ingress that got its address is the same")
+	}
+}

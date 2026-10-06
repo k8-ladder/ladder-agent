@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/tools/cache"
 )
@@ -45,6 +46,8 @@ type objects interface {
 	events(k objKey) []*corev1.Event
 	// pod returns a pod, or nil.
 	pod(namespace, name string) *corev1.Pod
+	// ingress returns an Ingress, or nil.
+	ingress(namespace, name string) *networkingv1.Ingress
 }
 
 // appProblems lists the problems in the tree under top seen since since, one
@@ -170,8 +173,9 @@ func lastExit(c corev1.ContainerStatus) (string, time.Time) {
 
 // indexes is objects over informer caches.
 type indexes struct {
-	owned  map[string]cache.Indexer // by kind, indexed by owner
-	warned cache.Indexer            // Warning events, indexed by involved object
+	owned     map[string]cache.Indexer // by kind, indexed by owner
+	warned    cache.Indexer            // Warning events, indexed by involved object
+	ingresses cache.Indexer
 }
 
 func (x *indexes) children(k objKey) []objKey {
@@ -205,6 +209,15 @@ func (x *indexes) pod(namespace, name string) *corev1.Pod {
 	}
 	p, _ := obj.(*corev1.Pod)
 	return p
+}
+
+func (x *indexes) ingress(namespace, name string) *networkingv1.Ingress {
+	obj, ok, _ := x.ingresses.GetByKey(namespace + "/" + name)
+	if !ok {
+		return nil
+	}
+	ing, _ := obj.(*networkingv1.Ingress)
+	return ing
 }
 
 // byOwner indexes an object under each of its owners.
