@@ -1,7 +1,7 @@
 # Ladder agent (spec §5.3). Applied by {{.PublicURL}}/install.sh, which also
 # creates Secret ladder/ladder-agent with the agent token and the cloud URL.
 #
-# To remove the agent; Gitea, Argo CD and the apps keep running:
+# To remove the agent; Argo CD and the apps keep running:
 #   kubectl delete namespace ladder
 #   kubectl delete clusterrolebinding ladder-agent
 apiVersion: v1
@@ -85,18 +85,3 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
----
-# Gitea posts pushes here (POST /hooks/git), and the agent has Argo CD read
-# git at once instead of at its next poll.
-apiVersion: v1
-kind: Service
-metadata:
-  name: ladder-agent
-  namespace: ladder
-  labels: {app.kubernetes.io/name: ladder-agent}
-spec:
-  selector: {app.kubernetes.io/name: ladder-agent}
-  # The webhook works while the cloud is unreachable, too.
-  publishNotReadyAddresses: true
-  ports:
-    - {name: http, port: 80, targetPort: http}

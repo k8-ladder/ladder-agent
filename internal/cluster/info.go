@@ -150,20 +150,6 @@ func (i *Inspector) ingressAddresses(ctx context.Context, namespace string) []st
 	return kube.IngressAddresses(ing)
 }
 
-// HasDefaultStorageClass reports whether PVCs without a class get a volume.
-func (i *Inspector) HasDefaultStorageClass(ctx context.Context) (bool, error) {
-	scs, err := i.k.Kube.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return false, err
-	}
-	for _, sc := range scs.Items {
-		if sc.Annotations[defaultClassAnnotation] == "true" {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // requested sums container requests of all pods that occupy a node.
 func (i *Inspector) requested(ctx context.Context) (protocol.Resources, error) {
 	var out protocol.Resources

@@ -53,18 +53,3 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
----
-# Gitea posts pushes here (POST /hooks/git), and the agent has Argo CD read
-# git at once instead of at its next poll.
-apiVersion: v1
-kind: Service
-metadata:
-  name: ladder-agent
-  namespace: ladder
-  labels: {app.kubernetes.io/name: ladder-agent}
-spec:
-  selector: {app.kubernetes.io/name: ladder-agent}
-  # The webhook works while the cloud is unreachable, too.
-  publishNotReadyAddresses: true
-  ports:
-    - {name: http, port: 80, targetPort: http}

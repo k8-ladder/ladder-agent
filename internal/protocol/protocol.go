@@ -38,8 +38,9 @@ const (
 	MethodSetupApply  = "setup.apply"
 	MethodSetupStatus = "setup.status"
 	MethodSetupRetry  = "setup.retry"
-	// MethodGitHTTP forwards one call to the Gitea API of the GitOps repository.
-	MethodGitHTTP = "git.http"
+	// MethodArgoCDRefresh has Argo CD read git now: the cloud sends it when
+	// the repository's main branch gets a push.
+	MethodArgoCDRefresh = "argocd.refresh"
 	// MethodArgoCDCredentials reads the initial Argo CD admin password.
 	MethodArgoCDCredentials = "argocd.credentials"
 	// MethodAgentUpgrade replaces the agent with another version of its image.
@@ -228,9 +229,11 @@ type AppsChanged struct {
 	Deleted bool      `json:"deleted,omitempty"`
 }
 
-// Setup providers, write modes and states.
+// Setup providers, write modes and states. With ProviderLadder the
+// repository lives in the Gitea next to the Ladder cloud, which creates it
+// and commits the starter files before setup.apply.
 const (
-	ProviderLocal  = "local"
+	ProviderLadder = "ladder"
 	ProviderGitHub = "github"
 
 	WriteModePR     = "pr"
@@ -259,8 +262,8 @@ type SetupPlan struct {
 	// Files is the starter repository rendered by the backend, path → content.
 	// Required by setup.apply; setup.plan ignores it.
 	Files map[string]string `json:"files,omitempty"`
-	// Credentials let Argo CD read a GitHub repository. Never stored in the
-	// state ConfigMap.
+	// Credentials let Argo CD read the repository. Never stored in the state
+	// ConfigMap.
 	Credentials *RepoCredentials `json:"credentials,omitempty"`
 }
 
@@ -273,10 +276,14 @@ type ArgoCDPlan struct {
 	Host string `json:"host,omitempty"`
 }
 
+// RepoCredentials are a user name and token for ProviderLadder, or a
+// GitHub App for ProviderGitHub.
 type RepoCredentials struct {
-	GitHubAppID             int64  `json:"githubAppID"`
-	GitHubAppInstallationID int64  `json:"githubAppInstallationID"`
-	GitHubAppPrivateKey     string `json:"githubAppPrivateKey"`
+	Username                string `json:"username,omitempty"`
+	Password                string `json:"password,omitempty"`
+	GitHubAppID             int64  `json:"githubAppID,omitempty"`
+	GitHubAppInstallationID int64  `json:"githubAppInstallationID,omitempty"`
+	GitHubAppPrivateKey     string `json:"githubAppPrivateKey,omitempty"`
 }
 
 // SetupPlanResult answers setup.plan. It has no side effects.
@@ -313,22 +320,6 @@ type StepStatus struct {
 	Detail     string `json:"detail,omitempty"`
 	StartedAt  string `json:"startedAt,omitempty"`
 	FinishedAt string `json:"finishedAt,omitempty"`
-}
-
-// GitHTTPRequest is the payload of git.http. Path starts with /api/v1/repos/
-// and must stay inside the GitOps repository; the agent adds the token.
-type GitHTTPRequest struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Query  string `json:"query,omitempty"`
-	Body   []byte `json:"body,omitempty"`
-}
-
-// GitHTTPResponse answers git.http with Gitea's answer, whatever its status.
-type GitHTTPResponse struct {
-	Status      int    `json:"status"`
-	ContentType string `json:"contentType,omitempty"`
-	Body        []byte `json:"body,omitempty"`
 }
 
 // Operations of kube.read.

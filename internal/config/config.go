@@ -24,12 +24,7 @@ type Config struct {
 	ArgoCDChartVersion string
 	ArgoCDChartRepo    string
 
-	GiteaImage string
-	// GiteaURL overrides the in-cluster Gitea address, for running the agent
-	// outside the cluster with kubectl port-forward.
-	GiteaURL string
-
-	// HTTPAddr serves /healthz, /readyz and Gitea's push webhook.
+	// HTTPAddr serves /healthz and /readyz.
 	HTTPAddr string
 	LogLevel string
 }
@@ -43,8 +38,6 @@ func Load() (Config, error) {
 		ArgoCDVersion:      env("ARGOCD_DEFAULT_VERSION", "3.5.3"),
 		ArgoCDChartVersion: env("ARGOCD_CHART_VERSION", "10.9.6"),
 		ArgoCDChartRepo:    env("ARGOCD_CHART_REPO", "https://argoproj.github.io/argo-helm"),
-		GiteaImage:         env("GITEA_IMAGE", "gitea/gitea:1.27.3-rootless"),
-		GiteaURL:           os.Getenv("LADDER_GITEA_URL"),
 		HTTPAddr:           env("HTTP_ADDR", ":8081"),
 		LogLevel:           env("LOG_LEVEL", "info"),
 	}

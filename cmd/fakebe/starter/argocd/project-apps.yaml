@@ -12,7 +12,6 @@ spec:
   destinations:
     - {server: https://kubernetes.default.svc, namespace: "![[ .ArgoCDNamespace ]]"}
     - {server: https://kubernetes.default.svc, namespace: "!ladder"}
-    - {server: https://kubernetes.default.svc, namespace: "!ladder-git"}
     - {server: https://kubernetes.default.svc, namespace: "!kube-*"}
     - {server: https://kubernetes.default.svc, namespace: "*"}
   clusterResourceWhitelist:

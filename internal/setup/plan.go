@@ -3,9 +3,9 @@ package setup
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 
-	"github.com/ladder/ladder-agent/internal/gitea"
 	"github.com/ladder/ladder-agent/internal/protocol"
 	"sigs.k8s.io/yaml"
 )
@@ -37,16 +37,18 @@ func (e *Engine) prepare(ctx context.Context, in protocol.SetupPlan, forApply bo
 	}
 
 	switch p.Provider {
-	case protocol.ProviderLocal:
-		p.Owner = gitea.Owner
-		if p.Repo == "" {
-			p.Repo = "deploy"
+	case protocol.ProviderLadder:
+		if !repoNameRe.MatchString(p.Owner) || !repoNameRe.MatchString(p.Repo) {
+			return nil, badRequest("owner and a valid repo are required")
 		}
-		if !repoNameRe.MatchString(p.Repo) {
-			return nil, badRequest("repo %q is not a valid repository name", p.Repo)
+		if u, err := url.Parse(p.RepoURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, badRequest("repoURL %q is not an http or https URL", p.RepoURL)
 		}
-		p.RepoURL = gitea.RepoURL(p.Repo)
-		p.Credentials = nil
+		if forApply {
+			if c := p.Credentials; c == nil || c.Username == "" || c.Password == "" {
+				return nil, badRequest("credentials with a username and a password are required")
+			}
+		}
 	case protocol.ProviderGitHub:
 		if p.Owner == "" || !repoNameRe.MatchString(p.Repo) {
 			return nil, badRequest("owner and a valid repo are required for GitHub")
@@ -61,7 +63,7 @@ func (e *Engine) prepare(ctx context.Context, in protocol.SetupPlan, forApply bo
 			}
 		}
 	default:
-		return nil, badRequest("provider must be %q or %q", protocol.ProviderLocal, protocol.ProviderGitHub)
+		return nil, badRequest("provider must be %q or %q", protocol.ProviderLadder, protocol.ProviderGitHub)
 	}
 
 	a := &p.ArgoCD
@@ -106,19 +108,12 @@ func (e *Engine) clusterObjects(p *protocol.SetupPlan) []protocol.ClusterObject 
 	add := func(kind, namespace, name, note string) {
 		objs = append(objs, protocol.ClusterObject{Action: "create", Kind: kind, Namespace: namespace, Name: name, Note: note})
 	}
-	if p.Provider == protocol.ProviderLocal {
-		add("Namespace", "", gitea.Namespace, "in-cluster git server")
-		add("Secret", gitea.Namespace, gitea.AdminSecret, "Gitea passwords and API token, not in git")
-		add("PersistentVolumeClaim", gitea.Namespace, "gitea-data", "1Gi")
-		add("Deployment", gitea.Namespace, gitea.Deployment, "")
-		add("Service", gitea.Namespace, gitea.Service, "")
-	}
 	add("HelmRelease", ns, argoRelease, "argo-cd chart "+p.ArgoCD.ChartVersion+", Argo CD "+p.ArgoCD.Version)
 	if p.ArgoCD.Exposure == "ingress" {
 		add("Ingress", ns, argoIngress, "Argo CD UI on path /argocd, from "+fileArgoCDValues)
 	}
 	add("Secret", ns, repoSecretName, "repository credentials for Argo CD, not in git")
 	add("Application", ns, "root", "from "+fileRootApp)
-	add("Secret", e.cfg.Namespace, ConnectionSecret, "provider, repository URL, credentials reference")
+	add("Secret", e.cfg.Namespace, ConnectionSecret, "provider, repository URL, Argo CD settings")
 	return objs
 }

@@ -1,6 +1,6 @@
 // Package setup runs the first-run setup as a resumable background job
-// (spec section 5.4): a cluster check, Gitea, Argo CD, the root Application
-// and the wait for the first sync.
+// (spec section 5.4): a cluster check, Argo CD, its repository Secret, the
+// root Application and the wait for the first sync.
 package setup
 
 import (
@@ -12,7 +12,6 @@ import (
 
 	"github.com/ladder/ladder-agent/internal/cluster"
 	"github.com/ladder/ladder-agent/internal/config"
-	"github.com/ladder/ladder-agent/internal/gitea"
 	"github.com/ladder/ladder-agent/internal/helmx"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/protocol"
@@ -21,7 +20,6 @@ import (
 type Engine struct {
 	k         *kube.Clients
 	helm      *helmx.Helm
-	gitea     *gitea.Installer
 	inspector *cluster.Inspector
 	cfg       config.Config
 	log       *slog.Logger
@@ -39,9 +37,9 @@ type Engine struct {
 	running bool
 }
 
-func NewEngine(jobCtx context.Context, k *kube.Clients, h *helmx.Helm, g *gitea.Installer, in *cluster.Inspector, cfg config.Config, log *slog.Logger) *Engine {
+func NewEngine(jobCtx context.Context, k *kube.Clients, h *helmx.Helm, in *cluster.Inspector, cfg config.Config, log *slog.Logger) *Engine {
 	return &Engine{
-		k: k, helm: h, gitea: g, inspector: in, cfg: cfg, log: log,
+		k: k, helm: h, inspector: in, cfg: cfg, log: log,
 		store:  &store{k: k, ns: cfg.Namespace},
 		jobCtx: jobCtx,
 		status: protocol.SetupStatus{State: protocol.SetupNotStarted, Steps: []protocol.StepStatus{}},
@@ -70,16 +68,6 @@ func (e *Engine) Resume() {
 		e.log.Info("resuming setup")
 		e.start()
 	}
-}
-
-// Repo is the repository chosen by setup, if any.
-func (e *Engine) Repo() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.plan == nil {
-		return ""
-	}
-	return e.plan.Repo
 }
 
 // ArgoCDNamespace is the namespace chosen by setup, if any.

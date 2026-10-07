@@ -35,7 +35,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 | `setup.apply` | `SetupPlan` with `files` | `SetupStatus`; setup continues in the background |
 | `setup.status` | none | `SetupStatus` |
 | `setup.retry` | none | `SetupStatus`; continues from the failed step |
-| `git.http` | `GitHTTPRequest` | `GitHTTPResponse`: Gitea's status, content type and body |
+| `argocd.refresh` | none | `{}` once Argo CD is asked to read git; see [Refresh](#refresh) |
 | `argocd.credentials` | none | `{ username, password }` from Secret `argocd-initial-admin-secret` |
 | `agent.upgrade` | `{ version }` | `AgentUpgrade` with `state: running`; see [Upgrade](#upgrade) |
 | `kube.read` | `KubeReadRequest` | `KubeReadResult`: `text` as kubectl prints it; see [Cluster reads](#cluster-reads) |
@@ -46,20 +46,28 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 
 ```json
 {
-  "provider": "local",
-  "repo": "deploy",
+  "provider": "ladder",
+  "owner": "acme",
+  "repo": "prod",
+  "repoURL": "https://ladder.example.com/git/acme/prod.git",
   "writeMode": "commit",
   "argocd": { "namespace": "argocd", "exposure": "ingress" },
   "files": { "ladder.yaml": "…", "bootstrap/root.yaml": "…", "platform/argocd/values.yaml": "…" },
-  "credentials": null
+  "credentials": { "username": "ladder-c-1f2e3d4c5b6a7980", "password": "…" }
 }
 ```
 
-- `local`: the agent fixes the owner to `ladder` and returns
-  `repoURL = http://gitea-http.ladder-git.svc:3000/ladder/<repo>.git`.
+- `ladder`: the repository lives in the Gitea next to the cloud. `owner`, `repo` and `repoURL`
+  (the address the cluster clones from) are required; `apply` also needs `credentials` with the
+  `username` and `password` (a token that reads only this repository) Argo CD clones with. The
+  backend creates the repository and commits the starter files before `apply`. The agent never
+  writes to git.
 - `github`: `owner` and `repo` are required. `apply` also needs `credentials`
   (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) for Argo CD's repository Secret.
   The backend must create the repository and push the starter files itself, before `apply`.
+- `credentials` are kept in Secret `ladder-setup-credentials`, never in the state ConfigMap.
+  Step `repo-secret` counts as done only when Secret `repo-deploy` holds this plan's URL and
+  credentials, so `apply` with a new token rewrites it.
 - Defaults: `writeMode: commit`, `argocd.exposure: ingress` (an Ingress on path `/argocd`, declared
   in `platform/argocd/values.yaml`; `host` is optional), Argo CD version and chart version from the
   agent's configuration.
@@ -67,28 +75,10 @@ The agent dials the backend; the backend never connects to the cluster. Types li
   CD versions. Required files: `ladder.yaml`, `bootstrap/root.yaml`, `platform/argocd/values.yaml`.
 - The agent always installs its own Argo CD. The first step, `check-cluster`, fails when the
   cluster already runs an Argo CD that Ladder did not install (its namespace lacks the label
-  `app.kubernetes.io/managed-by=ladder`), or has no default StorageClass.
+  `app.kubernetes.io/managed-by=ladder`).
 - `apply` returns `conflict` while setup is running and `failed_precondition` once it is done.
   After a failure, either `retry` or `apply` again with a corrected plan. Steps that are already done
   are skipped.
-
-## Gitea proxy
-
-`git.http` lets the backend use the Gitea API of the GitOps repository, which is reachable only
-inside the cluster.
-
-```json
-{ "method": "GET", "path": "/api/v1/repos/ladder/deploy/contents/ladder.yaml", "query": "ref=main" }
-{ "status": 200, "contentType": "application/json;charset=utf-8", "body": "eyJ…" }
-```
-
-- `body` is base64 in JSON (Go `[]byte`), at most 8 MiB each way.
-- `path` is URL-escaped and must be `/api/v1/repos/ladder/<repo>` or below it, with no `.`, `..` or
-  empty segments. Methods: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`.
-- The agent adds the admin token from Secret `ladder-git/ladder-git-admin`. The token never leaves
-  the cluster.
-- Gitea's errors come back as a response with their status. A protocol error means the call was
-  refused (`bad_request`) or Gitea is not set up yet (`failed_precondition`).
 
 ## Cluster reads
 
@@ -225,12 +215,11 @@ created, it exits, or it is not ready within 5 minutes. It then sets its own ima
 `failed_precondition` for the version that runs already, `conflict` while setup or another
 upgrade runs. A new agent resumes an interrupted setup only once it is the Deployment's only pod.
 
-## Push webhook
+## Refresh
 
-Gitea posts pushes to `http://ladder-agent.<namespace>.svc/hooks/git` (Service `ladder-agent`,
-port `http`). The agent checks `X-Gitea-Signature` against `webhook-secret` in Secret
-`ladder-git/ladder-git-admin`. On a push to `main` it annotates every ApplicationSet with
+The cloud's Gitea posts every push to `main` to the cloud, which sends `argocd.refresh` to the
+cluster's agent. The agent annotates every ApplicationSet with
 `argocd.argoproj.io/application-set-refresh` and every Application with
 `argocd.argoproj.io/refresh`, so Argo CD reads git at once instead of at its next poll, about 3
-minutes later. Gitea's webhook settings allow only this host. The agent creates the webhook during
-setup, and on start when setup is already done.
+minutes later. An agent that does not know the method answers `unknown_method`, and Argo CD reads
+the push at its next poll.
