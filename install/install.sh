@@ -5,7 +5,10 @@
 #   curl -fsSL {{.PublicURL}}/install.sh | sh
 #
 # Environment: LADDER_CODE skips the code prompt, LADDER_YES=1 skips the
-# confirmation, LADDER_URL overrides the Ladder address.
+# confirmation, LADDER_URL overrides the Ladder address. LADDER_INGRESS_PORT
+# is the port people reach the cluster's ingress on, when not 80, such as
+# 8080 for k3d -p 8080:80@loadbalancer. sandbox.sh sets LADDER_CLUSTER, the
+# cluster in Ladder this agent is for.
 set -eu
 
 LADDER_URL="${LADDER_URL:-{{.PublicURL}}}"
@@ -47,10 +50,12 @@ code="${LADDER_CODE:-}"
 [ -n "$code" ] || ask code "Connect code from $LADDER_URL: "
 code=$(printf '%s' "$code" | tr -cd 'A-Za-z0-9-')
 name=$(printf '%s' "$context" | tr -d '"\\')
+cluster=$(printf '%s' "${LADDER_CLUSTER:-}" | tr -cd 'a-z0-9_')
+port=$(printf '%s' "${LADDER_INGRESS_PORT:-}" | tr -cd '0-9')
 
 show "curl -X POST $LADDER_URL/api/agent/enroll"
 resp=$(curl -sS -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
-	-d "{\"code\":\"$code\",\"clusterName\":\"$name\"}" "$LADDER_URL/api/agent/enroll") ||
+	-d "{\"code\":\"$code\",\"clusterName\":\"$name\",\"clusterID\":\"$cluster\",\"ingressPort\":\"$port\"}" "$LADDER_URL/api/agent/enroll") ||
 	fail "cannot reach $LADDER_URL"
 status=$(printf '%s\n' "$resp" | tail -n 1)
 body=$(printf '%s\n' "$resp" | sed '$d')
