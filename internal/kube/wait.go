@@ -37,7 +37,7 @@ func WorkloadsReady(ctx context.Context, k *Clients, namespace string, deploymen
 			continue
 		}
 		found++
-		if !deploymentReady(&d) {
+		if !DeploymentReady(&d) {
 			notReady = append(notReady, "deployment/"+d.Name)
 		}
 	}
@@ -50,7 +50,7 @@ func WorkloadsReady(ctx context.Context, k *Clients, namespace string, deploymen
 			return false, nil, err
 		}
 		for _, s := range sts.Items {
-			if !statefulSetReady(&s) {
+			if !StatefulSetReady(&s) {
 				notReady = append(notReady, "statefulset/"+s.Name)
 			}
 		}
@@ -69,7 +69,8 @@ func WaitDeploymentsReady(ctx context.Context, k *Clients, namespace string, dep
 	})
 }
 
-func deploymentReady(d *appsv1.Deployment) bool {
+// DeploymentReady reports whether d has rolled out all its replicas.
+func DeploymentReady(d *appsv1.Deployment) bool {
 	want := int32(1)
 	if d.Spec.Replicas != nil {
 		want = *d.Spec.Replicas
@@ -79,7 +80,8 @@ func deploymentReady(d *appsv1.Deployment) bool {
 		d.Status.AvailableReplicas >= want
 }
 
-func statefulSetReady(s *appsv1.StatefulSet) bool {
+// StatefulSetReady reports whether s has all its replicas ready.
+func StatefulSetReady(s *appsv1.StatefulSet) bool {
 	want := int32(1)
 	if s.Spec.Replicas != nil {
 		want = *s.Spec.Replicas
