@@ -12,7 +12,9 @@ import (
 	"github.com/ladder/ladder-agent/internal/helmx"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/protocol"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -292,22 +294,12 @@ func (e *Engine) stepSync(p *protocol.SetupPlan) step {
 			if err != nil {
 				return false, nil, err
 			}
-			sync, _, _ := unstructured.NestedString(u.Object, "status", "sync", "status")
-			health, _, _ := unstructured.NestedString(u.Object, "status", "health", "status")
-			line := fmt.Sprintf("%s: %s, %s", name, or(sync, "Unknown"), or(health, "Unknown"))
-			if msg, _, _ := unstructured.NestedString(u.Object, "status", "operationState", "message"); msg != "" {
-				line += ": " + msg
+			ready, line, err := appSynced(ctx, e.k, u)
+			if err != nil {
+				return false, nil, err
 			}
-			conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
-			for _, c := range conds {
-				if m, ok := c.(map[string]any); ok {
-					line += fmt.Sprintf("; %v: %v", m["type"], m["message"])
-				}
-			}
-			lines = append(lines, line)
-			if sync != "Synced" || health != "Healthy" {
-				ok = false
-			}
+			lines = append(lines, name+": "+line)
+			ok = ok && ready
 		}
 		return ok, lines, nil
 	}
@@ -334,6 +326,74 @@ func (e *Engine) stepSync(p *protocol.SetupPlan) step {
 			return strings.Join(lines, "\n")
 		},
 	}
+}
+
+// appSynced says whether an Application is Synced and Healthy, and describes
+// its state. Argo CD reports an Ingress without an address as Progressing, and
+// a cluster without an ingress controller, such as DOKS, never gives one: an
+// Application that is Progressing while some of its Ingresses have no address
+// and its Deployments and StatefulSets have rolled out counts as healthy.
+// Argo CD 3 keeps the health of each resource out of the Application
+// (status.resourceHealthSource appTree), so these are read from the cluster.
+func appSynced(ctx context.Context, k *kube.Clients, u *unstructured.Unstructured) (bool, string, error) {
+	sync, _, _ := unstructured.NestedString(u.Object, "status", "sync", "status")
+	health, _, _ := unstructured.NestedString(u.Object, "status", "health", "status")
+	line := fmt.Sprintf("%s, %s", or(sync, "Unknown"), or(health, "Unknown"))
+	if msg, _, _ := unstructured.NestedString(u.Object, "status", "operationState", "message"); msg != "" {
+		line += ": " + msg
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		if m, ok := c.(map[string]any); ok {
+			line += fmt.Sprintf("; %v: %v", m["type"], m["message"])
+		}
+	}
+	if sync != "Synced" || health != "Progressing" {
+		return sync == "Synced" && health == "Healthy", line, nil
+	}
+	noAddress, notReady := 0, 0
+	res, _, _ := unstructured.NestedSlice(u.Object, "status", "resources")
+	for _, r := range res {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _, _ := unstructured.NestedString(m, "group")
+		kind, _, _ := unstructured.NestedString(m, "kind")
+		ns, _, _ := unstructured.NestedString(m, "namespace")
+		name, _, _ := unstructured.NestedString(m, "name")
+		var ready bool
+		var err error
+		switch group + "/" + kind {
+		case "networking.k8s.io/Ingress":
+			var ing *networkingv1.Ingress
+			if ing, err = k.Kube.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && len(kube.IngressAddresses(ing)) == 0 {
+				noAddress++
+				line += fmt.Sprintf("; Ingress %s/%s has no address (no ingress controller in the cluster?)", ns, name)
+			}
+			continue
+		case "apps/Deployment":
+			var d *appsv1.Deployment
+			if d, err = k.Kube.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+				ready = kube.DeploymentReady(d)
+			}
+		case "apps/StatefulSet":
+			var st *appsv1.StatefulSet
+			if st, err = k.Kube.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+				ready = kube.StatefulSetReady(st)
+			}
+		default:
+			continue
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			return false, "", err
+		}
+		if !ready {
+			notReady++
+			line += fmt.Sprintf("; %s %s/%s is not ready", kind, ns, name)
+		}
+	}
+	return noAddress > 0 && notReady == 0, line, nil
 }
 
 func (e *Engine) stepSaveConnection(p *protocol.SetupPlan) step {
