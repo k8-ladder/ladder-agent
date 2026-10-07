@@ -1,8 +1,8 @@
 // Command agent is ladder-agent: the in-cluster part of Ladder. It dials
 // ladder-be, reports cluster facts and Argo CD status, runs first-run setup,
-// forwards the cloud's calls to the in-cluster Gitea, has Argo CD read git as
-// soon as Gitea reports a push, shows the assistant cluster objects, events
-// and logs, and replaces itself with a new version.
+// has Argo CD read git as soon as the cloud reports a push, shows the
+// assistant cluster objects, events and logs, and replaces itself with a new
+// version.
 package main
 
 import (
@@ -22,7 +22,6 @@ import (
 	"github.com/ladder/ladder-agent/internal/argo"
 	"github.com/ladder/ladder-agent/internal/cluster"
 	"github.com/ladder/ladder-agent/internal/config"
-	"github.com/ladder/ladder-agent/internal/gitea"
 	"github.com/ladder/ladder-agent/internal/helmx"
 	"github.com/ladder/ladder-agent/internal/inspect"
 	"github.com/ladder/ladder-agent/internal/kube"
@@ -65,11 +64,8 @@ func run() error {
 	log.Info("starting", "version", Version, "context", k.Context, "kubernetes", hello.KubernetesVersion)
 
 	inspector := cluster.NewInspector(k)
-	// The Service ladder-agent of the install manifest.
-	hookURL := fmt.Sprintf("http://%s.%s.svc%s", upgrade.Deployment, cfg.Namespace, gitea.HookPath)
-	giteaInstaller := gitea.NewInstaller(k, cfg.GiteaImage, cfg.GiteaURL, hookURL, log.With("component", "gitea"))
 	engine := setup.NewEngine(ctx, k, helmx.New(log.With("component", "helm")),
-		giteaInstaller, inspector, cfg, log.With("component", "setup"))
+		inspector, cfg, log.With("component", "setup"))
 	be := link.New(cfg.BackendURL, cfg.Token, log.With("component", "link"))
 
 	engine.OnChange = func(s protocol.SetupStatus) { be.Emit(protocol.EventSetupStatus, s) }
@@ -144,12 +140,8 @@ func run() error {
 	be.Handle(protocol.MethodSetupRetry, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return engine.Retry(ctx)
 	})
-	be.Handle(protocol.MethodGitHTTP, func(ctx context.Context, raw json.RawMessage) (any, error) {
-		var req protocol.GitHTTPRequest
-		if err := decode(raw, &req); err != nil {
-			return nil, err
-		}
-		return giteaInstaller.Proxy(ctx, engine.Repo(), req)
+	be.Handle(protocol.MethodArgoCDRefresh, func(ctx context.Context, _ json.RawMessage) (any, error) {
+		return struct{}{}, argo.Refresh(ctx, k, argoNS)
 	})
 	be.Handle(protocol.MethodArgoCDCredentials, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		ns := engine.ArgoCDNamespace()
@@ -188,14 +180,6 @@ func run() error {
 		return upgrader.Start(reqCtx, ctx, req.Version)
 	})
 
-	// Setup does not run again once it is done: bring an older Gitea install
-	// up to this agent's version, such as the push webhook.
-	if st := engine.Status(); st.State == protocol.SetupDone && st.Provider == protocol.ProviderLocal {
-		go retry(ctx, log.With("component", "gitea"), "update gitea", func(ctx context.Context) error {
-			return giteaInstaller.Install(ctx, engine.Repo())
-		})
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
@@ -205,9 +189,6 @@ func run() error {
 		}
 		w.Write([]byte("ok"))
 	})
-	mux.Handle("POST "+gitea.HookPath, giteaInstaller.HookHandler(func(ctx context.Context) error {
-		return argo.Refresh(ctx, k, argoNS)
-	}))
 
 	go watcher.Run(ctx)
 	go serveHTTP(ctx, cfg.HTTPAddr, mux, log)
@@ -239,25 +220,7 @@ func decode(raw json.RawMessage, v any) error {
 	return nil
 }
 
-// retry runs fn until it succeeds or ctx ends, waiting longer after each failure.
-func retry(ctx context.Context, log *slog.Logger, what string, fn func(context.Context) error) {
-	wait := 10 * time.Second
-	for {
-		err := fn(ctx)
-		if err == nil || ctx.Err() != nil {
-			return
-		}
-		log.Warn(what+" failed, retrying", "err", err, "in", wait)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(wait):
-		}
-		wait = min(2*wait, 5*time.Minute)
-	}
-}
-
-// serveHTTP serves /healthz, /readyz and Gitea's push webhook.
+// serveHTTP serves /healthz and /readyz.
 func serveHTTP(ctx context.Context, addr string, mux *http.ServeMux, log *slog.Logger) {
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

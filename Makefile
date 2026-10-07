@@ -33,11 +33,9 @@ logs:
 fakebe:
 	go run ./cmd/fakebe
 
-# Run the agent on the laptop against the current kube context. Local-mode
-# setup then needs: kubectl -n ladder-git port-forward svc/gitea-http 3000
+# Run the agent on the laptop against the current kube context.
 run:
-	LADDER_BE_URL=ws://localhost:9000/agent/connect LADDER_AGENT_TOKEN=dev-token \
-	LADDER_GITEA_URL=http://localhost:3000 go run ./cmd/agent
+	LADDER_BE_URL=ws://localhost:9000/agent/connect LADDER_AGENT_TOKEN=dev-token go run ./cmd/agent
 
 # Remove everything setup created, to run it again on the same cluster.
 reset:

@@ -15,7 +15,8 @@ import (
 // Refresh makes Argo CD read git now instead of at its next poll (about three
 // minutes): every ApplicationSet is generated again, so a new app gets its
 // Application, and every Application is compared with the new commit. Argo CD
-// removes the annotations once it has acted on them. Called on a push to main.
+// removes the annotations once it has acted on them. Called on a push to main;
+// before setup has installed Argo CD there is nothing to refresh.
 func Refresh(ctx context.Context, k *kube.Clients, namespace string) error {
 	var errs []error
 	for _, r := range []struct {
@@ -28,6 +29,9 @@ func Refresh(ctx context.Context, k *kube.Clients, namespace string) error {
 		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{r.annotation: r.value}}})
 		ri := k.Dynamic.Resource(r.gvr).Namespace(namespace)
 		list, err := ri.List(ctx, metav1.ListOptions{})
+		if apierrors.IsNotFound(err) {
+			continue // no CRD yet
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue

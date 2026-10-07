@@ -4,15 +4,17 @@
 //
 //	curl localhost:9000/cluster
 //	curl localhost:9000/apps
-//	curl -X POST localhost:9000/setup/plan  -d '{"provider":"local"}'
-//	curl -X POST localhost:9000/setup/apply -d '{"provider":"local"}'
+//	curl -X POST localhost:9000/setup/plan  -d '{"provider":"ladder","owner":"acme","repo":"dev","repoURL":"http://host.k3d.internal:8081/git/acme/dev.git"}'
+//	curl -X POST localhost:9000/setup/apply -d '{…, "credentials":{"username":"…","password":"…"}}'
 //	curl localhost:9000/setup/status
 //	curl -X POST localhost:9000/setup/retry
 //	curl localhost:9000/argocd/credentials
+//	curl -X POST localhost:9000/argocd/refresh
 //	curl -X POST localhost:9000/kube -d '{"op":"list","kind":"pods","namespace":"argocd"}'
-//	curl -X POST localhost:9000/git -d '{"method":"GET","path":"/api/v1/repos/ladder/deploy/contents/ladder.yaml"}'
 //
-// For setup.apply it renders a minimal starter repository from ./starter.
+// For setup.apply it renders a minimal starter repository from ./starter. The
+// repository at repoURL must hold those files already: the real cloud
+// commits them before setup.apply.
 package main
 
 import (
@@ -57,7 +59,7 @@ func main() {
 	mux.HandleFunc("POST /setup/retry", b.forward(protocol.MethodSetupRetry))
 	mux.HandleFunc("POST /setup/apply", b.apply)
 	mux.HandleFunc("GET /argocd/credentials", b.forward(protocol.MethodArgoCDCredentials))
-	mux.HandleFunc("POST /git", b.forward(protocol.MethodGitHTTP))
+	mux.HandleFunc("POST /argocd/refresh", b.forward(protocol.MethodArgoCDRefresh))
 	mux.HandleFunc("POST /kube", b.forward(protocol.MethodKubeRead))
 	mux.HandleFunc("POST /app/events", b.forward(protocol.MethodAppEvents))
 	mux.HandleFunc("POST /app/logs", b.forward(protocol.MethodAppLogs))
