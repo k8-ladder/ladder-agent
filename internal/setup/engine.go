@@ -241,7 +241,7 @@ func (e *Engine) exec(ctx context.Context, s step) (result, detail string, err e
 	}
 	sctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	err = s.run(sctx)
+	err = e.runRetrying(sctx, s)
 	if errors.Is(err, context.DeadlineExceeded) {
 		err = errors.New("timed out after " + s.timeout.String())
 	}
@@ -251,6 +251,35 @@ func (e *Engine) exec(ctx context.Context, s step) (result, detail string, err e
 		dcancel()
 	}
 	return protocol.StepDone, detail, err
+}
+
+// firstRetryPause is how long runRetrying waits before its first retry.
+var firstRetryPause = 2 * time.Second
+
+// runRetrying runs the step, and runs it again with a growing pause while it
+// fails because the cluster's API did not answer (kube.Transient), until ctx
+// ends. Before running again it checks whether the step is done: the work may
+// have gone through although the answer was lost.
+func (e *Engine) runRetrying(ctx context.Context, s step) error {
+	pause := firstRetryPause
+	for {
+		err := s.run(ctx)
+		if !kube.Transient(err) {
+			return err
+		}
+		e.log.Warn("step failed, trying again", "step", s.id, "err", err, "pause", pause)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(pause):
+		}
+		pause = min(2*pause, 30*time.Second)
+		if s.done != nil {
+			if ok, _ := s.done(ctx); ok {
+				return nil
+			}
+		}
+	}
 }
 
 // update changes the status, saves it and notifies the backend.

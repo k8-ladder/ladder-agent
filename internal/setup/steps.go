@@ -117,10 +117,25 @@ func (e *Engine) stepArgoInstall(p *protocol.SetupPlan) step {
 			if err != nil {
 				return err
 			}
+			if rel != nil && rel.Status == "deployed" {
+				return nil
+			}
 			if rel != nil {
-				// A pending or failed release blocks a new install; fixing it
-				// needs a human decision in the POC.
-				return fmt.Errorf("release %s is %s; inspect with `helm -n %s history %s`, then uninstall it and retry", argoRelease, rel.Status, ns, argoRelease)
+				// An earlier attempt failed or was cut off, such as by the
+				// cluster's API dropping the connection, and its release
+				// blocks a new install. In Ladder's namespace it is setup's
+				// own: remove it and install again.
+				ours, err := e.k.NamespaceHasLabels(ctx, ns, managedLabels())
+				if err != nil {
+					return err
+				}
+				if !ours {
+					return fmt.Errorf("release %s is %s; inspect with `helm -n %s history %s`, then uninstall it and retry", argoRelease, rel.Status, ns, argoRelease)
+				}
+				e.log.Info("removing the release of an earlier attempt", "release", argoRelease, "status", rel.Status)
+				if err := e.helm.Uninstall(ns, argoRelease, 5*time.Minute); err != nil {
+					return err
+				}
 			}
 			var values map[string]any
 			if err := yaml.Unmarshal([]byte(p.Files[fileArgoCDValues]), &values); err != nil {

@@ -99,3 +99,20 @@ func (h *Helm) Install(ctx context.Context, o InstallOptions) error {
 	}
 	return nil
 }
+
+// Uninstall removes a release in any state, with the resources it owns, and
+// its history. Resources the chart keeps, such as CRDs, stay.
+func (h *Helm) Uninstall(namespace, name string, timeout time.Duration) error {
+	cfg, _, err := h.config(namespace)
+	if err != nil {
+		return err
+	}
+	uninstall := action.NewUninstall(cfg)
+	uninstall.IgnoreNotFound = true
+	uninstall.WaitStrategy = kube.HookOnlyStrategy
+	uninstall.Timeout = timeout
+	if _, err := uninstall.Run(name); err != nil {
+		return fmt.Errorf("helm uninstall %s: %w", name, err)
+	}
+	return nil
+}
