@@ -79,6 +79,10 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 - `apply` returns `conflict` while setup is running and `failed_precondition` once it is done.
   After a failure, either `retry` or `apply` again with a corrected plan. Steps that are already done
   are skipped.
+- A step that fails because the cluster's API did not answer (dropped connection, timeout, `429`,
+  `5xx`) runs again by itself with a growing pause until its timeout. `argocd-install` removes an
+  `argocd` release that an earlier attempt left failed or pending in Ladder's namespace, then
+  installs again.
 
 ## Cluster reads
 
