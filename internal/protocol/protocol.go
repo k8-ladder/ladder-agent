@@ -171,6 +171,13 @@ type ArgoCDInfo struct {
 	// addresses, where app hosts point. With k3s's servicelb, one per node.
 	// Absent from agents that report only Address.
 	Addresses []string `json:"addresses,omitempty"`
+	// Hosts are the hosts of the Ingress's rules, empty while it takes every
+	// host. TLSHosts are those of its TLS entries whose Secret holds a
+	// certificate: Argo CD opens over HTTPS there. Both absent without the
+	// Ingress and from agents before them: Hosts is sent empty, so that the
+	// cloud tells a hostless Ingress from an agent that does not say.
+	Hosts    []string `json:"hosts"`
+	TLSHosts []string `json:"tlsHosts,omitempty"`
 }
 
 // AppStatus is the Argo CD view of one Ladder app (an Application with
