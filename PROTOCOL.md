@@ -29,7 +29,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 
 | Method | Payload | Result |
 |---|---|---|
-| `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable/requested/free, storage classes, `setupAccess`, Argo CD detection with its Ingress's `address` and all its `addresses`, `warnings` |
+| `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable/requested/free, storage classes, `setupAccess`, Argo CD detection with its Ingress's `address`, all its `addresses`, the `hosts` of its rules and its `tlsHosts`, `warnings`; see [Argo CD's Ingress](#argo-cds-ingress) |
 | `apps.status` | none | `AppsSnapshot` |
 | `setup.plan` | `SetupPlan` without `files` | `SetupPlanResult`: `repoURL`, Argo CD settings with defaults filled in, steps, cluster objects. No side effects. |
 | `setup.apply` | `SetupPlan` with `files` | `SetupStatus`; setup continues in the background |
@@ -198,6 +198,16 @@ hosts in DNS from them. Absent for an app without an Ingress and from agents bef
 the cloud then falls back to `cluster.info`'s `argocd.addresses`, those of the default ingress
 class, and to `argocd.address` from agents before that. An app that exists in git but has no Application is the backend's
 to show as `Missing`.
+
+## Argo CD's Ingress
+
+`cluster.info` reads Ingress `argocd-server` in Argo CD's namespace. `address` and `addresses` are
+the IPs and host names in its `status.loadBalancer.ingress`; `hosts` are the hosts of its rules,
+`[]` while its rule takes every host; `tlsHosts` are the hosts of its `tls` entries whose Secret
+holds a `tls.crt`, which cert-manager writes once Let's Encrypt has issued the certificate. The
+cloud links Argo CD over HTTPS at a TLS host, over HTTP at another host, and at an address
+without one. All four are absent or `null` without the Ingress, and `hosts` and `tlsHosts` from
+agents before them: the cloud gives Argo CD its sslip.io host only when `hosts` is `[]` (spec §5.6).
 
 ## Upgrade
 

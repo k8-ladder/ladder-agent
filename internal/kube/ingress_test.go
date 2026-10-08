@@ -34,3 +34,20 @@ func TestIngressHosts(t *testing.T) {
 		t.Errorf("hosts of an Ingress without rules = %#v, want empty", got)
 	}
 }
+
+func TestIngressTLSHosts(t *testing.T) {
+	ing := &networkingv1.Ingress{Spec: networkingv1.IngressSpec{TLS: []networkingv1.IngressTLS{
+		{Hosts: []string{"argocd.203-0-113-7.sslip.io"}, SecretName: "argocd-server-tls"},
+		{Hosts: []string{"shop.example.com"}, SecretName: "shop-tls"},
+		{Hosts: []string{"argocd.203-0-113-7.sslip.io", ""}, SecretName: "other-tls"},
+		{Hosts: []string{"default.example.com"}},
+	}}}
+	issued := map[string]bool{"argocd-server-tls": true, "other-tls": true}
+	want := []string{"argocd.203-0-113-7.sslip.io"}
+	if got := IngressTLSHosts(ing, func(s string) bool { return issued[s] }); !slices.Equal(got, want) {
+		t.Errorf("TLS hosts = %v, want %v", got, want)
+	}
+	if got := IngressTLSHosts(&networkingv1.Ingress{}, nil); got == nil || len(got) != 0 {
+		t.Errorf("TLS hosts of an Ingress without TLS = %#v, want empty", got)
+	}
+}

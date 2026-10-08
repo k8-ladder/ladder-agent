@@ -126,7 +126,7 @@ func (i *Inspector) ArgoCD(ctx context.Context) (*protocol.ArgoCDInfo, error) {
 	d := deps.Items[0]
 	out.Found = true
 	out.Namespace = d.Namespace
-	out.Addresses = i.ingressAddresses(ctx, d.Namespace)
+	out.Addresses, out.Hosts, out.TLSHosts = i.ingress(ctx, d.Namespace)
 	if len(out.Addresses) > 0 {
 		out.Address = out.Addresses[0]
 	}
@@ -140,14 +140,19 @@ func (i *Inspector) ArgoCD(ctx context.Context) (*protocol.ArgoCDInfo, error) {
 	return out, nil
 }
 
-// ingressAddresses are the addresses the ingress controller reported for
-// Ingress argocd-server, none while there are none.
-func (i *Inspector) ingressAddresses(ctx context.Context, namespace string) []string {
+// ingress reads Ingress argocd-server: the addresses the ingress controller
+// reported for it, the hosts of its rules, and those it serves over HTTPS
+// with a certificate in place. None without the Ingress.
+func (i *Inspector) ingress(ctx context.Context, namespace string) (addresses, hosts, tlsHosts []string) {
 	ing, err := i.k.Kube.NetworkingV1().Ingresses(namespace).Get(ctx, "argocd-server", metav1.GetOptions{})
 	if err != nil {
-		return nil
+		return nil, nil, nil
 	}
-	return kube.IngressAddresses(ing)
+	hasCert := func(name string) bool {
+		s, err := i.k.Kube.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		return err == nil && len(s.Data[corev1.TLSCertKey]) > 0
+	}
+	return kube.IngressAddresses(ing), kube.IngressHosts(ing), kube.IngressTLSHosts(ing, hasCert)
 }
 
 // requested sums container requests of all pods that occupy a node.

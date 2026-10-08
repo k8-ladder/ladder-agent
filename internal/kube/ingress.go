@@ -35,3 +35,22 @@ func IngressHosts(ing *networkingv1.Ingress) []string {
 	}
 	return out
 }
+
+// IngressTLSHosts are the hosts of the Ingress's TLS entries whose Secret
+// holds a certificate, without repeats: the hosts it serves over HTTPS. An
+// entry whose Secret is not there yet, such as one cert-manager has still to
+// fill, adds none.
+func IngressTLSHosts(ing *networkingv1.Ingress, hasCert func(secret string) bool) []string {
+	out := []string{}
+	for _, t := range ing.Spec.TLS {
+		if t.SecretName == "" || !hasCert(t.SecretName) {
+			continue
+		}
+		for _, h := range t.Hosts {
+			if h != "" && !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
