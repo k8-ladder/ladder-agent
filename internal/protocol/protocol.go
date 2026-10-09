@@ -1,8 +1,6 @@
-// Package protocol is the wire contract between ladder-agent and ladder-be.
-//
-// The agent dials the backend over WebSocket and exchanges JSON envelopes.
-// The backend sends requests, the agent answers with responses and pushes
-// events on its own. See PROTOCOL.md for the full description.
+// Package protocol mirrors the wire contract between ladder-agent and
+// ladder-be. ladder-agent/PROTOCOL.md is the contract; the agent's
+// internal/protocol package holds the same types. Keep the two in sync.
 package protocol
 
 import (
@@ -52,7 +50,17 @@ const (
 	MethodAppEvents = "app.events"
 	// MethodAppLogs reads the last lines of one app's pods for its page.
 	MethodAppLogs = "app.logs"
+	// MethodAppSecretsCreate creates an immutable version of an app's env secrets.
+	MethodAppSecretsCreate = "app.secrets.create"
 )
+
+// AppSecretsCreate never returns values. Name is ladder-<app>-env-<32 hex digits>.
+type AppSecretsCreate struct {
+	App       string            `json:"app"`
+	Namespace string            `json:"namespace"`
+	Name      string            `json:"name"`
+	Values    map[string]string `json:"values"`
+}
 
 // Events from the agent to the backend.
 const (
