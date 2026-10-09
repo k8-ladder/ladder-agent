@@ -20,6 +20,7 @@ import (
 
 const (
 	readLimit    = 16 << 20 // starter repository files arrive in one setup.apply
+	dialTimeout  = 15 * time.Second
 	pingInterval = 20 * time.Second
 	pingTimeout  = 10 * time.Second
 	writeTimeout = 10 * time.Second
@@ -115,6 +116,8 @@ type session struct {
 
 func (c *Client) serve(ctx context.Context) (connected bool, err error) {
 	conn, _, err := websocket.Dial(ctx, c.url, &websocket.DialOptions{
+		// The WebSocket library applies this timeout only to the handshake.
+		HTTPClient: &http.Client{Timeout: dialTimeout},
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + c.token}},
 	})
 	if err != nil {

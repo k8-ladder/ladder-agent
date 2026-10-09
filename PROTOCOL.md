@@ -8,7 +8,10 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 - WebSocket, text frames, one JSON envelope per frame.
 - The agent connects to `LADDER_BE_URL` (for example `ws://ladder-be.ladder.svc/agent/connect`)
   with `Authorization: Bearer <LADDER_AGENT_TOKEN>`. The backend rejects a bad token with `401`.
-- The agent pings every 20 s and reconnects with backoff from 1 s to 30 s.
+- Each connection attempt has a 15 s timeout for DNS lookup, TCP/TLS connection and the
+  HTTP upgrade. The timeout ends only that attempt, not an established WebSocket session.
+- The agent pings every 20 s and reconnects with backoff from 1 s to 30 s, plus jitter
+  of up to 50%. Failed or timed-out attempts return to that loop without restarting the pod.
 - Frames can be up to 16 MiB, because `setup.apply` carries the starter repository.
 
 ## Envelope
