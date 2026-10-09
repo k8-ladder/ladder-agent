@@ -42,6 +42,9 @@ const FieldManager = "ladder-agent"
 var (
 	ApplicationGVR    = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	ApplicationSetGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+	// PodMetricsGVR is served by Metrics Server when the cluster has one. It
+	// is dynamic because Kubernetes does not include its API in client-go.
+	PodMetricsGVR = schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
 )
 
 type Clients struct {

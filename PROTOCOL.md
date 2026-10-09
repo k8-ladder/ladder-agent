@@ -29,7 +29,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 
 | Method | Payload | Result |
 |---|---|---|
-| `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable/requested/free, storage classes, `setupAccess`, Argo CD detection with its Ingress's `address`, all its `addresses`, the `hosts` of its rules and its `tlsHosts`, `warnings`; see [Argo CD's Ingress](#argo-cds-ingress) |
+| `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable capacity, scheduled pods' requests, limits and free capacity, live `used` CPU and memory when Metrics Server serves them, storage classes, `setupAccess`, Argo CD detection with its Ingress's `address`, all its `addresses`, the `hosts` of its rules and its `tlsHosts`, `warnings`; see [Argo CD's Ingress](#argo-cds-ingress) |
 | `apps.status` | none | `AppsSnapshot` |
 | `setup.plan` | `SetupPlan` without `files` | `SetupPlanResult`: `repoURL`, Argo CD settings with defaults filled in, steps, cluster objects. No side effects. |
 | `setup.apply` | `SetupPlan` with `files` | `SetupStatus`; setup continues in the background |

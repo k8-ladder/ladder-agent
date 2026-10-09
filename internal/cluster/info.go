@@ -12,7 +12,9 @@ import (
 	"github.com/ladder/ladder-agent/internal/protocol"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const defaultClassAnnotation = "storageclass.kubernetes.io/is-default-class"
@@ -54,13 +56,27 @@ func (i *Inspector) Info(ctx context.Context) (*protocol.ClusterInfo, error) {
 		}
 	}
 
-	if req, err := i.requested(ctx); err != nil {
+	if req, limits, err := i.planned(ctx); err != nil {
 		warn("pod requests", err)
 	} else {
 		info.Requested = req
+		info.Limits = &limits
 		info.Free = protocol.Resources{
 			CPUMillis:   max(info.Allocatable.CPUMillis-req.CPUMillis, 0),
 			MemoryBytes: max(info.Allocatable.MemoryBytes-req.MemoryBytes, 0),
+		}
+	}
+
+	// Metrics Server is optional. It gives the resource panel a live reading
+	// when present, while clusters without it still report capacity and plans.
+	if available, err := i.k.HasResource(kube.PodMetricsGVR); err != nil {
+		warn("pod usage", err)
+	} else if available {
+		used, err := i.usage(ctx)
+		if err != nil {
+			warn("pod usage", err)
+		} else {
+			info.Used = &used
 		}
 	}
 
@@ -155,26 +171,90 @@ func (i *Inspector) ingress(ctx context.Context, namespace string) (addresses, h
 	return kube.IngressAddresses(ing), kube.IngressHosts(ing), kube.IngressTLSHosts(ing, hasCert)
 }
 
-// requested sums container requests of all pods that occupy a node.
-func (i *Inspector) requested(ctx context.Context) (protocol.Resources, error) {
-	var out protocol.Resources
+// planned sums container requests and limits of all pods that occupy a node.
+// These are the resources the pod specs plan for, including the platform pods
+// that use the cluster alongside applications.
+func (i *Inspector) planned(ctx context.Context) (requests, limits protocol.Resources, err error) {
 	pods, err := i.k.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: "status.phase!=Succeeded,status.phase!=Failed",
 	})
 	if err != nil {
-		return out, err
+		return requests, limits, err
 	}
 	for _, p := range pods.Items {
 		if p.Spec.NodeName == "" {
 			continue
 		}
 		for _, c := range p.Spec.Containers {
-			r := resources(c.Resources.Requests)
-			out.CPUMillis += r.CPUMillis
-			out.MemoryBytes += r.MemoryBytes
+			req := resources(c.Resources.Requests)
+			requests.CPUMillis += req.CPUMillis
+			requests.MemoryBytes += req.MemoryBytes
+			limit := resources(c.Resources.Limits)
+			limits.CPUMillis += limit.CPUMillis
+			limits.MemoryBytes += limit.MemoryBytes
+		}
+	}
+	return requests, limits, nil
+}
+
+// usage sums the resource usage Metrics Server reports for running pod
+// containers. PodMetrics is an aggregated API, so it is read through the
+// dynamic client rather than client-go's core Kubernetes client.
+func (i *Inspector) usage(ctx context.Context) (protocol.Resources, error) {
+	var out protocol.Resources
+	metrics, err := i.k.Dynamic.Resource(kube.PodMetricsGVR).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return out, err
+	}
+	for _, pod := range metrics.Items {
+		containers, found, err := unstructured.NestedSlice(pod.Object, "containers")
+		if err != nil {
+			return out, fmt.Errorf("read containers in pod metric %s/%s: %w", pod.GetNamespace(), pod.GetName(), err)
+		}
+		if !found {
+			continue
+		}
+		for _, container := range containers {
+			values, ok := container.(map[string]any)
+			if !ok {
+				return out, fmt.Errorf("read container in pod metric %s/%s", pod.GetNamespace(), pod.GetName())
+			}
+			usage, found, err := unstructured.NestedStringMap(values, "usage")
+			if err != nil {
+				return out, fmt.Errorf("read usage in pod metric %s/%s: %w", pod.GetNamespace(), pod.GetName(), err)
+			}
+			if !found {
+				continue
+			}
+			used, err := metricResources(usage)
+			if err != nil {
+				return out, fmt.Errorf("read usage in pod metric %s/%s: %w", pod.GetNamespace(), pod.GetName(), err)
+			}
+			out.CPUMillis += used.CPUMillis
+			out.MemoryBytes += used.MemoryBytes
 		}
 	}
 	return out, nil
+}
+
+func metricResources(values map[string]string) (protocol.Resources, error) {
+	cpu, ok := values[string(corev1.ResourceCPU)]
+	if !ok {
+		return protocol.Resources{}, fmt.Errorf("no CPU value")
+	}
+	memory, ok := values[string(corev1.ResourceMemory)]
+	if !ok {
+		return protocol.Resources{}, fmt.Errorf("no memory value")
+	}
+	cpuQuantity, err := resource.ParseQuantity(cpu)
+	if err != nil {
+		return protocol.Resources{}, fmt.Errorf("parse CPU %q: %w", cpu, err)
+	}
+	memoryQuantity, err := resource.ParseQuantity(memory)
+	if err != nil {
+		return protocol.Resources{}, fmt.Errorf("parse memory %q: %w", memory, err)
+	}
+	return protocol.Resources{CPUMillis: cpuQuantity.MilliValue(), MemoryBytes: memoryQuantity.Value()}, nil
 }
 
 func resources(l corev1.ResourceList) protocol.Resources {

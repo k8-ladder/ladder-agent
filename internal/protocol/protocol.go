@@ -127,15 +127,21 @@ const (
 
 // ClusterInfo answers cluster.info: facts for the cluster screen.
 type ClusterInfo struct {
-	Context           string         `json:"context"`
-	KubernetesVersion string         `json:"kubernetesVersion"`
-	Nodes             []Node         `json:"nodes"`
-	Allocatable       Resources      `json:"allocatable"`
-	Requested         Resources      `json:"requested"`
-	Free              Resources      `json:"free"`
-	StorageClasses    []StorageClass `json:"storageClasses"`
-	SetupAccess       bool           `json:"setupAccess"`
-	ArgoCD            ArgoCDInfo     `json:"argocd"`
+	Context           string    `json:"context"`
+	KubernetesVersion string    `json:"kubernetesVersion"`
+	Nodes             []Node    `json:"nodes"`
+	Allocatable       Resources `json:"allocatable"`
+	Requested         Resources `json:"requested"`
+	// Limits are the total CPU and memory limits of scheduled pod containers.
+	// Nil means this agent could not read pods.
+	Limits *Resources `json:"limits,omitempty"`
+	// Used is the live CPU and memory the Metrics API reports for running pod
+	// containers. Nil means Metrics Server is unavailable or refused the read.
+	Used           *Resources     `json:"used,omitempty"`
+	Free           Resources      `json:"free"`
+	StorageClasses []StorageClass `json:"storageClasses"`
+	SetupAccess    bool           `json:"setupAccess"`
+	ArgoCD         ArgoCDInfo     `json:"argocd"`
 	// Warnings lists facts the agent could not read, usually for lack of RBAC.
 	Warnings []string `json:"warnings,omitempty"`
 }
