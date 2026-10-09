@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ladder/ladder-agent/internal/appsecrets"
 	"github.com/ladder/ladder-agent/internal/argo"
 	"github.com/ladder/ladder-agent/internal/cluster"
 	"github.com/ladder/ladder-agent/internal/config"
@@ -151,6 +152,13 @@ func run() error {
 		return argo.InitialCredentials(ctx, k, ns)
 	})
 	reader := inspect.New(k)
+	be.Handle(protocol.MethodAppSecretsCreate, func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var req protocol.AppSecretsCreate
+		if json.Unmarshal(raw, &req) != nil {
+			return nil, protocol.Errorf(protocol.CodeBadRequest, "Invalid app secrets payload")
+		}
+		return struct{}{}, appsecrets.Create(ctx, k, req)
+	})
 	be.Handle(protocol.MethodKubeRead, func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.KubeReadRequest
 		if err := decode(raw, &req); err != nil {

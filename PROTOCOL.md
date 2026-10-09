@@ -43,6 +43,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 | `agent.upgrade` | `{ version }` | `AgentUpgrade` with `state: running`; see [Upgrade](#upgrade) |
 | `kube.read` | `KubeReadRequest` | `KubeReadResult`: `text` as kubectl prints it; see [Cluster reads](#cluster-reads) |
 | `app.events` | `{ app }` | `AppEvents`: the events of one app's objects; see [App events and logs](#app-events-and-logs) |
+| `app.secrets.create` | `{ app, namespace, name, values }` | `{}` after an immutable app env Secret exists; values never returned |
 | `app.logs` | `AppLogsRequest` | `AppLogs`: the app's pods and their last lines; see [App events and logs](#app-events-and-logs) |
 
 `SetupPlan`:
@@ -113,6 +114,14 @@ change, create, delete or exec anything.
   it was applied with kubectl. `list` prints only the server's columns, which hold no values.
 - `text` is at most 32 KiB; `truncated` is set when it was cut. Logs keep their newest lines.
 - Agents before this method answer `unknown_method`.
+
+## App env secrets
+
+`app.secrets.create` accepts an app name (DNS label, up to 53 characters), a non-platform namespace, a Secret name `ladder-<app>-env-<32 lowercase hex digits>` and 1–256 data keys, each 1–253 characters from letters, digits, `.`, `_`, `-`. Keys plus values total at most 512 KiB. `ladder`, `argocd` and every `kube-*` namespace are refused before touching the API. This is not a generic apply/read method.
+
+The agent creates the app namespace if missing, then an Opaque Secret with `immutable: true` and label `ladder.dev/app-secrets: <app>`, using the typed Kubernetes client. It sets no last-applied annotation or Argo tracking label. A repeated name with identical data and matching immutable metadata succeeds; a repeated name with other data returns `conflict`. Admission and API errors use fixed messages and never contain submitted values. Responses are `{}`; no listing, value read-back or automatic deletion method is provided. Old versions stay for PRs and rollback.
+
+The cloud validates the loaded Git blob and values before calling, waits for success and then commits name/key references. An old agent answers `unknown_method`; the cloud maps it to `409 agent_outdated`. A failed Git write may leave a harmless unused version; retrying the same operation is idempotent. Hosted connections use WSS; local development uses the existing local WS connection. Secret values are transient in browser/cloud memory and are never persisted by the cloud.
 
 ## App events and logs
 
