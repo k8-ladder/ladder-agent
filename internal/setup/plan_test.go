@@ -24,6 +24,45 @@ func ladderPlan() protocol.SetupPlan {
 	}
 }
 
+func TestGitHubDeployKey(t *testing.T) {
+	ctx := context.Background()
+	e := &Engine{cfg: config.Config{ArgoCDNamespace: "argocd"}, k: &kube.Clients{Kube: fake.NewClientset()}}
+	p := ladderPlan()
+	p.Provider = protocol.ProviderGitHub
+	p.RepoURL = "ssh://git@github.com/acme/prod.git"
+	p.Credentials = &protocol.RepoCredentials{SSHPrivateKey: "private-key"}
+	prepared, err := e.prepare(ctx, p, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := e.stepRepoSecret(prepared)
+	if err := s.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := e.k.Kube.CoreV1().Secrets("argocd").Get(ctx, repoSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["sshPrivateKey"]) != "private-key" || string(sec.Data["url"]) != p.RepoURL || len(sec.Data) != 3 {
+		t.Fatalf("repository Secret = %+v", sec.Data)
+	}
+	if done, err := s.done(ctx); err != nil || !done {
+		t.Fatalf("read-only key Secret not done: %v %v", done, err)
+	}
+	p.Credentials.SSHPrivateKey = "rotated-key"
+	if done, _ := s.done(ctx); done {
+		t.Fatal("old deploy key counted as done")
+	}
+	p.RepoURL = "ssh://git@evil.example/acme/prod.git"
+	if _, err := e.prepare(ctx, p, true); err == nil {
+		t.Fatal("accepted deploy key for another host")
+	}
+	p.RepoURL = "https://github.com/acme/prod.git"
+	if _, err := e.prepare(ctx, p, true); err == nil {
+		t.Fatal("accepted HTTPS URL with SSH credentials")
+	}
+}
+
 func TestPrepareLadder(t *testing.T) {
 	e := &Engine{cfg: config.Config{ArgoCDNamespace: "argocd", ArgoCDVersion: "3.5.3", ArgoCDChartVersion: "10.9.6"}}
 	p, err := e.prepare(context.Background(), ladderPlan(), true)

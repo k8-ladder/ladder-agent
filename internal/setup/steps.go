@@ -173,6 +173,10 @@ func (e *Engine) stepRepoSecret(p *protocol.SetupPlan) step {
 			d["username"] = c.Username
 			d["password"] = c.Password
 		case protocol.ProviderGitHub:
+			if c.SSHPrivateKey != "" {
+				d["sshPrivateKey"] = c.SSHPrivateKey
+				break
+			}
 			d["githubAppID"] = strconv.FormatInt(c.GitHubAppID, 10)
 			d["githubAppInstallationID"] = strconv.FormatInt(c.GitHubAppInstallationID, 10)
 			d["githubAppPrivateKey"] = c.GitHubAppPrivateKey

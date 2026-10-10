@@ -67,7 +67,8 @@ The agent dials the backend; the backend never connects to the cluster. Types li
   backend creates the repository and commits the starter files before `apply`. The agent never
   writes to git.
 - `github`: `owner` and `repo` are required. `apply` also needs `credentials`
-  (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) for Argo CD's repository Secret.
+  with `sshPrivateKey` and the exact SSH repository URL `ssh://git@github.com/<owner>/<repo>.git` for a read-only deploy key, or
+  (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) for a GitHub App. Argo CD’s repository Secret uses the corresponding authentication fields.
   The backend must create the repository and push the starter files itself, before `apply`.
 - `credentials` are kept in Secret `ladder-setup-credentials`, never in the state ConfigMap.
   Step `repo-secret` counts as done only when Secret `repo-deploy` holds this plan's URL and

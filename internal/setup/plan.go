@@ -56,10 +56,16 @@ func (e *Engine) prepare(ctx context.Context, in protocol.SetupPlan, forApply bo
 		if p.RepoURL == "" {
 			p.RepoURL = fmt.Sprintf("https://github.com/%s/%s.git", p.Owner, p.Repo)
 		}
+		if p.Credentials != nil && p.Credentials.SSHPrivateKey != "" {
+			expected := fmt.Sprintf("ssh://git@github.com/%s/%s.git", p.Owner, p.Repo)
+			if p.RepoURL != expected {
+				return nil, badRequest("SSH deploy keys require repoURL %q", expected)
+			}
+		}
 		if forApply {
 			c := p.Credentials
-			if c == nil || c.GitHubAppID == 0 || c.GitHubAppInstallationID == 0 || c.GitHubAppPrivateKey == "" {
-				return nil, badRequest("credentials with GitHub App ID, installation ID and private key are required")
+			if c == nil || c.SSHPrivateKey == "" && (c.GitHubAppID == 0 || c.GitHubAppInstallationID == 0 || c.GitHubAppPrivateKey == "") {
+				return nil, badRequest("credentials with a read-only SSH deploy key or GitHub App are required")
 			}
 		}
 	default:
