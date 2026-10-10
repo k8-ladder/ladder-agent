@@ -298,8 +298,9 @@ type ArgoCDPlan struct {
 }
 
 // RepoCredentials are a user name and token for ProviderLadder, or a
-// GitHub App for ProviderGitHub.
+// read-only SSH deploy key or a GitHub App for ProviderGitHub.
 type RepoCredentials struct {
+	SSHPrivateKey           string `json:"sshPrivateKey,omitempty"`
 	Username                string `json:"username,omitempty"`
 	Password                string `json:"password,omitempty"`
 	GitHubAppID             int64  `json:"githubAppID,omitempty"`
