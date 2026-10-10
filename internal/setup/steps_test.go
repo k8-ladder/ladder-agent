@@ -6,14 +6,50 @@ import (
 	"testing"
 
 	"github.com/ladder/ladder-agent/internal/kube"
+	"github.com/ladder/ladder-agent/internal/protocol"
 	appsv1 "k8s.io/api/apps/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/yaml"
 )
+
+func TestSyncWaitsForMetricsServer(t *testing.T) {
+	app := func(name, health string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+			"metadata": map[string]any{"name": name, "namespace": "argocd"},
+			"status":   map[string]any{"sync": map[string]any{"status": "Synced"}, "health": map[string]any{"status": health}},
+		}}
+	}
+	dc := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), app("root", "Healthy"), app("argocd", "Healthy"), app("appsets", "Healthy"))
+	e := &Engine{k: &kube.Clients{Dynamic: dc}}
+	p := &protocol.SetupPlan{ArgoCD: protocol.ArgoCDPlan{Namespace: "argocd"}, Files: map[string]string{}}
+	if done, err := e.stepSync(p).done(t.Context()); err != nil || !done {
+		t.Fatalf("existing metrics provider: done=%v, err=%v", done, err)
+	}
+	p.Files["bootstrap/metrics-server.yaml"] = "kind: Application"
+	if done, err := e.stepSync(p).done(t.Context()); err != nil || done {
+		t.Fatalf("missing metrics application: done=%v, err=%v", done, err)
+	}
+	metrics := app("metrics-server", "Progressing")
+	if _, err := dc.Resource(kube.ApplicationGVR).Namespace("argocd").Create(t.Context(), metrics, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := e.stepSync(p).done(t.Context()); err != nil || done {
+		t.Fatalf("metrics starting: done=%v, err=%v", done, err)
+	}
+	metrics = app("metrics-server", "Healthy")
+	if _, err := dc.Resource(kube.ApplicationGVR).Namespace("argocd").Update(t.Context(), metrics, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := e.stepSync(p).done(t.Context()); err != nil || !done {
+		t.Fatalf("metrics ready: done=%v, err=%v", done, err)
+	}
+}
 
 // argocdResources is status.resources of Application argocd as Argo CD 3
 // writes it: without the health of each resource.

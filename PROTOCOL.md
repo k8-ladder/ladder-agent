@@ -34,7 +34,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 |---|---|---|
 | `cluster.info` | none | `ClusterInfo`: version, nodes, allocatable capacity, scheduled pods' requests, limits and free capacity, live `used` CPU and memory when Metrics Server serves them, storage classes, `setupAccess`, Argo CD detection with its Ingress's `address`, all its `addresses`, the `hosts` of its rules and its `tlsHosts`, `warnings`; see [Argo CD's Ingress](#argo-cds-ingress) |
 | `apps.status` | none | `AppsSnapshot` |
-| `setup.plan` | `SetupPlan` without `files` | `SetupPlanResult`: `repoURL`, Argo CD settings with defaults filled in, steps, cluster objects. No side effects. |
+| `setup.plan` | `SetupPlan` without `files` | `SetupPlanResult`: `repoURL`, Argo CD settings with defaults filled in, steps, cluster objects, `metricsServerPresent`. No side effects. |
 | `setup.apply` | `SetupPlan` with `files` | `SetupStatus`; setup continues in the background |
 | `setup.status` | none | `SetupStatus` |
 | `setup.retry` | none | `SetupStatus`; continues from the failed step |
@@ -78,6 +78,12 @@ The agent dials the backend; the backend never connects to the cluster. Types li
   agent's configuration.
 - Starter files are rendered by the backend. Call `setup.plan` first to learn `repoURL` and the Argo
   CD versions. Required files: `ladder.yaml`, `bootstrap/root.yaml`, `platform/argocd/values.yaml`.
+- `metricsServerPresent` is true when APIService `v1beta1.metrics.k8s.io` already exists, even
+  when it is unhealthy. A false value lets the cloud add `bootstrap/metrics-server.yaml` and
+  `platform/metrics-server/values.yaml` to the starter repository; Argo CD installs the chart.
+  An omitted value comes from an older agent, so the cloud adds no Metrics Server. A refused
+  APIService read fails `setup.plan`, rather than risking a second provider.
+  When the Metrics Server Application is in `files`, the sync step waits for it to be healthy.
 - The agent always installs its own Argo CD. The first step, `check-cluster`, fails when the
   cluster already runs an Argo CD that Ladder did not install (its namespace lacks the label
   `app.kubernetes.io/managed-by=ladder`).

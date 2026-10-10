@@ -7,8 +7,13 @@ import (
 	"github.com/ladder/ladder-agent/internal/config"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/protocol"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 func ladderPlan() protocol.SetupPlan {
@@ -21,6 +26,44 @@ func ladderPlan() protocol.SetupPlan {
 			fileLadder: "branch: main\n", fileRootApp: "kind: Application\n", fileArgoCDValues: "configs: {}\n",
 		},
 		Credentials: &protocol.RepoCredentials{Username: "ladder-c-1", Password: "token-1"},
+	}
+}
+
+func TestPlanMetricsServer(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "registered but unhealthy"}[present], func(t *testing.T) {
+			var objs []runtime.Object
+			if present {
+				objs = append(objs, &unstructured.Unstructured{Object: map[string]any{
+					"apiVersion": "apiregistration.k8s.io/v1", "kind": "APIService",
+					"metadata": map[string]any{"name": "v1beta1.metrics.k8s.io"},
+					"status":   map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": "False"}}},
+				}})
+			}
+			dc := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), objs...)
+			e := &Engine{cfg: config.Config{ArgoCDNamespace: "argocd"}, k: &kube.Clients{Dynamic: dc}}
+			p, err := e.Plan(t.Context(), ladderPlan())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.MetricsServerPresent == nil || *p.MetricsServerPresent != present {
+				t.Fatalf("metrics presence = %v, want %v", p.MetricsServerPresent, present)
+			}
+			for _, action := range dc.Actions() {
+				if action.GetVerb() != "get" {
+					t.Errorf("setup.plan changed cluster: %+v", action)
+				}
+			}
+		})
+	}
+
+	dc := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	dc.PrependReactor("get", "apiservices", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(kube.APIServiceGVR.GroupResource(), "v1beta1.metrics.k8s.io", nil)
+	})
+	e := &Engine{cfg: config.Config{ArgoCDNamespace: "argocd"}, k: &kube.Clients{Dynamic: dc}}
+	if _, err := e.Plan(t.Context(), ladderPlan()); !apierrors.IsForbidden(err) {
+		t.Fatalf("refused detection = %v, want forbidden", err)
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 	"github.com/ladder/ladder-agent/internal/helmx"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/protocol"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type Engine struct {
@@ -92,11 +94,19 @@ func (e *Engine) Plan(ctx context.Context, in protocol.SetupPlan) (*protocol.Set
 	if err != nil {
 		return nil, err
 	}
+	// A registered but unhealthy provider still owns the Metrics API. Never
+	// replace it just because discovery or a usage reading is unavailable.
+	_, err = e.k.Dynamic.Resource(kube.APIServiceGVR).Get(ctx, "v1beta1.metrics.k8s.io", metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	metricsPresent := err == nil
 	return &protocol.SetupPlanResult{
-		RepoURL:        p.RepoURL,
-		ArgoCD:         p.ArgoCD,
-		Steps:          pendingSteps(e.steps(p)),
-		ClusterObjects: e.clusterObjects(p),
+		RepoURL:              p.RepoURL,
+		ArgoCD:               p.ArgoCD,
+		Steps:                pendingSteps(e.steps(p)),
+		ClusterObjects:       e.clusterObjects(p),
+		MetricsServerPresent: &metricsPresent,
 	}, nil
 }
 

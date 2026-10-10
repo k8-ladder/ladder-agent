@@ -265,6 +265,9 @@ func (e *Engine) stepRootApp(p *protocol.SetupPlan) step {
 func (e *Engine) stepSync(p *protocol.SetupPlan) step {
 	ns := p.ArgoCD.Namespace
 	apps := []string{"root", "argocd", "appsets"}
+	if p.Files["bootstrap/metrics-server.yaml"] != "" {
+		apps = append(apps, "metrics-server")
+	}
 	check := func(ctx context.Context) (bool, []string, error) {
 		var lines []string
 		ok := true

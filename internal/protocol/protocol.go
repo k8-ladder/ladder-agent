@@ -314,6 +314,9 @@ type SetupPlanResult struct {
 	ArgoCD         ArgoCDPlan      `json:"argocd"`
 	Steps          []StepStatus    `json:"steps"`
 	ClusterObjects []ClusterObject `json:"clusterObjects"`
+	// MetricsServerPresent reports an existing Metrics API registration, even
+	// if unhealthy. Nil means an older agent did not check; do not install over it.
+	MetricsServerPresent *bool `json:"metricsServerPresent,omitempty"`
 }
 
 type ClusterObject struct {
