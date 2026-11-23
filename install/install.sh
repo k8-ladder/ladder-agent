@@ -9,6 +9,10 @@
 # is the port people reach the cluster's ingress on, when not 80, such as
 # 8080 for k3d -p 8080:80@loadbalancer. sandbox.sh sets LADDER_CLUSTER, the
 # cluster in Ladder this agent is for.
+#
+# Ladder knows a cluster by the UID of its kube-system namespace: run again
+# where its agent ran, the script gives that cluster a new agent token and
+# reinstalls the agent, rather than adding another cluster.
 set -eu
 
 LADDER_URL="${LADDER_URL:-{{.PublicURL}}}"
@@ -52,10 +56,12 @@ code=$(printf '%s' "$code" | tr -cd 'A-Za-z0-9-')
 name=$(printf '%s' "$context" | tr -d '"\\')
 cluster=$(printf '%s' "${LADDER_CLUSTER:-}" | tr -cd 'a-z0-9_')
 port=$(printf '%s' "${LADDER_INGRESS_PORT:-}" | tr -cd '0-9')
+show "kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'"
+uid=$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null | tr -cd 'A-Za-z0-9-' || true)
 
 show "curl -X POST $LADDER_URL/api/agent/enroll"
 resp=$(curl -sS -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
-	-d "{\"code\":\"$code\",\"clusterName\":\"$name\",\"clusterID\":\"$cluster\",\"ingressPort\":\"$port\"}" "$LADDER_URL/api/agent/enroll") ||
+	-d "{\"code\":\"$code\",\"clusterName\":\"$name\",\"clusterID\":\"$cluster\",\"kubeUID\":\"$uid\",\"ingressPort\":\"$port\"}" "$LADDER_URL/api/agent/enroll") ||
 	fail "cannot reach $LADDER_URL"
 status=$(printf '%s\n' "$resp" | tail -n 1)
 body=$(printf '%s\n' "$resp" | sed '$d')
@@ -66,6 +72,9 @@ fi
 token=$(printf '%s' "$body" | json_field token)
 url=$(printf '%s' "$body" | json_field url)
 [ -n "$token" ] && [ -n "$url" ] || fail "unexpected answer from $LADDER_URL"
+if printf '%s' "$body" | grep -q '"reconnected": *true'; then
+	say "Ladder already knows this cluster as $(printf '%s' "$body" | json_field clusterName): its agent gets a new token."
+fi
 
 # An older install may have bound ladder-agent to another role, and a
 # binding's roleRef cannot change: replace it.
