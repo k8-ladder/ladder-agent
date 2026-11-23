@@ -180,6 +180,40 @@ func TestBadRequests(t *testing.T) {
 	}
 }
 
+// A name or namespace that is not one never reaches an API path: it could
+// read a Secret through another kind, with its values, or the kubelet.
+func TestNamesThatLeaveThePathAreRefused(t *testing.T) {
+	r, calls := reader(nil, nil)
+	for _, req := range []protocol.KubeReadRequest{
+		{Op: "get", Kind: "pods", Namespace: "argocd", Name: "../secrets/argocd-initial-admin-secret"},
+		{Op: "get", Kind: "nodes", Name: "node-1/proxy/logs/"},
+		{Op: "get", Kind: "nodes", Name: ".."},
+		{Op: "get", Kind: "pods", Namespace: "argocd/secrets", Name: "x"},
+		{Op: "get", Kind: "pods", Namespace: "kube-system/../argocd", Name: "x"},
+		{Op: "get", Kind: "pods", Namespace: "shop", Name: "web%2F..%2Fx"},
+		{Op: "list", Kind: "pods", Namespace: "../.."},
+		{Op: "logs", Namespace: "shop", Name: "web/../../x"},
+		{Op: "logs", Namespace: "shop", Name: "web", Container: "app/x"},
+		{Op: "events", Namespace: "shop", Name: "a/b"},
+	} {
+		_, err := r.Read(context.Background(), req)
+		var perr *protocol.Error
+		if err == nil || !asProtocol(err, &perr) || perr.Code != protocol.CodeBadRequest {
+			t.Errorf("%+v: err = %v, want bad_request", req, err)
+		}
+	}
+	if len(*calls) > 0 {
+		t.Errorf("API calls: %+v, want none", *calls)
+	}
+}
+
+// Names Kubernetes allows still read, such as a ClusterRole's with colons.
+func TestNamesWithColonsRead(t *testing.T) {
+	if err := CheckNames(protocol.KubeReadRequest{Name: "system:aggregate-to-view", Namespace: "kube-system"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func asProtocol(err error, perr **protocol.Error) bool {
 	p, ok := err.(*protocol.Error)
 	*perr = p

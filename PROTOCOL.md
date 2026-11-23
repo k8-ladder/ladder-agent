@@ -115,6 +115,10 @@ change, create, delete or exec anything.
 - `kind` is a kind, resource or short name as kubectl takes them: `Pod`, `deployments`, `deploy`,
   `applications.argoproj.io`. A kind the cluster does not serve, a missing object or a bad selector is
   `bad_request`, with the API server's message.
+- `namespace` and `container` must be DNS labels and `name` a path segment the API server takes (no
+  `/`, no `%`, not `.` or `..`); anything else is `bad_request` before any API call. The agent builds
+  the API path of them for objects of any kind, and `../secrets/x` through `configmaps` would read a
+  Secret with its values, or `node-1/proxy/logs` the kubelet.
 - **Secrets stay in the cluster.** `get` of a Secret replaces each value of `data` and `stringData`
   with `<hidden, N bytes>`. Every object loses `metadata.managedFields` and the annotation
   `kubectl.kubernetes.io/last-applied-configuration`, which holds a copy of a Secret's values when

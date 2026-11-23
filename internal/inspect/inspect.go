@@ -19,10 +19,12 @@ import (
 	"github.com/ladder/ladder-agent/internal/protocol"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/validation/path"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/restmapper"
 	"sigs.k8s.io/yaml"
@@ -74,6 +76,9 @@ func New(k *kube.Clients) *Reader {
 
 // Read serves one kube.read request.
 func (r *Reader) Read(ctx context.Context, req protocol.KubeReadRequest) (*protocol.KubeReadResult, error) {
+	if err := CheckNames(req); err != nil {
+		return nil, err
+	}
 	var (
 		text string
 		err  error
@@ -109,6 +114,30 @@ func (r *Reader) Read(ctx context.Context, req protocol.KubeReadRequest) (*proto
 		}
 	}
 	return res, nil
+}
+
+// CheckNames refuses a namespace, name or container that is not one, before
+// any of them goes into an API path. The path is built by hand for objects of
+// any kind, and a name such as "../secrets/x" or "node-1/proxy/logs" would
+// read another resource than the kind asked for: a Secret through "configmaps",
+// with its values, or the kubelet through a node.
+func CheckNames(req protocol.KubeReadRequest) error {
+	if req.Namespace != "" {
+		if errs := validation.IsDNS1123Label(req.Namespace); len(errs) > 0 {
+			return protocol.Errorf(protocol.CodeBadRequest, "namespace %q is not a namespace name: %s", req.Namespace, strings.Join(errs, "; "))
+		}
+	}
+	if req.Name != "" {
+		if errs := path.IsValidPathSegmentName(req.Name); len(errs) > 0 {
+			return protocol.Errorf(protocol.CodeBadRequest, "name %q is not an object name: %s", req.Name, strings.Join(errs, "; "))
+		}
+	}
+	if req.Container != "" {
+		if errs := validation.IsDNS1123Label(req.Container); len(errs) > 0 {
+			return protocol.Errorf(protocol.CodeBadRequest, "container %q is not a container name: %s", req.Container, strings.Join(errs, "; "))
+		}
+	}
+	return nil
 }
 
 // resource is a kind as the API serves it.
