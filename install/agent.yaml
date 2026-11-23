@@ -1,4 +1,4 @@
-# Ladder agent (spec §5.3). Applied by {{.PublicURL}}/install.sh, which also
+# Ladder agent (spec §5.3). Applied by {{if .PublicURL}}{{.PublicURL}}/{{end}}install.sh, which also
 # creates Secret ladder/ladder-agent with the agent token and the cloud URL.
 #
 # To remove the agent; Argo CD and the apps keep running:

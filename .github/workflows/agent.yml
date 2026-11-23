@@ -12,6 +12,9 @@ on:
     branches: [main]
     paths:
       - ladder-agent/**
+      # The release of install.sh and agent.yaml goes with each agent version.
+      - ladder-be/internal/api/install/**
+      - ladder-be/cmd/installfiles/**
       - .github/workflows/agent.yml
   workflow_dispatch:
 
@@ -36,7 +39,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # The release of install.sh and the manifest.
+      contents: write
       packages: write
       # cosign keyless: Fulcio certifies this workflow's identity with the
       # job's OIDC token.
@@ -79,6 +83,27 @@ jobs:
       - run: cosign sign --yes "$IMAGE@$DIGEST"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-      - run: echo "Agent \`$IMAGE:$VERSION\` (\`$DIGEST\`), signed. The deploy workflow has the cloud offer it to clusters." >> "$GITHUB_STEP_SUMMARY"
+      # The release people may install from instead of a cloud (spec §5.3):
+      # install.sh, which takes LADDER_URL, and agent.yaml with this image by
+      # digest, each with the cosign bundle of this workflow. Published where
+      # the cloud has no say, it is what LADDER_INSTALL_URL names.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ladder-be/go.mod
+          cache-dependency-path: ladder-be/go.sum
+      - run: go run ./cmd/installfiles -image "$IMAGE@$DIGEST" -out "$RUNNER_TEMP/release"
+        working-directory: ladder-be
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - run: |
+          for f in install.sh agent.yaml; do
+            cosign sign-blob --yes --bundle "$RUNNER_TEMP/release/$f.sigstore.json" "$RUNNER_TEMP/release/$f"
+          done
+          gh release create "agent-$VERSION" "$RUNNER_TEMP"/release/* --latest \
+            --title "Agent $VERSION" --notes "Agent \`$IMAGE@$DIGEST\`. Install it from here, not from a cloud: \`curl -fsSL <this release>/install.sh | LADDER_URL=<your Ladder> LADDER_INSTALL_URL=<this release> sh\`."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - run: echo "Agent \`$IMAGE:$VERSION\` (\`$DIGEST\`), signed, and the release agent-$VERSION. The deploy workflow has the cloud offer it to clusters." >> "$GITHUB_STEP_SUMMARY"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

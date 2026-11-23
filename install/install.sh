@@ -2,10 +2,18 @@
 # Installs the Ladder agent into the cluster of the current kubectl context
 # (spec §5.3):
 #
-#   curl -fsSL {{.PublicURL}}/install.sh | sh
+#   curl -fsSL {{if .PublicURL}}{{.PublicURL}}/install.sh | sh{{else}}<release>/install.sh | LADDER_URL=<Ladder> LADDER_INSTALL_URL=<release> sh{{end}}
 #
 # Environment: LADDER_CODE skips the code prompt, LADDER_YES=1 skips the
-# confirmation, LADDER_URL overrides the Ladder address. LADDER_INGRESS_PORT
+# confirmation, LADDER_URL overrides the Ladder address. LADDER_INSTALL_URL
+# is where the agent's manifest is read from instead of Ladder: a release of
+# this script and the manifest, with the agent's image by digest, that does
+# not come from the cloud you install for. The script of such a release has
+# no address of its own and needs LADDER_URL:
+#
+#   curl -fsSL <release>/install.sh | LADDER_URL=<Ladder> LADDER_INSTALL_URL=<release> sh
+#
+# LADDER_INGRESS_PORT
 # is the port people reach the cluster's ingress on, when not 80, such as
 # 8080 for k3d -p 8080:80@loadbalancer. sandbox.sh sets LADDER_CLUSTER, the
 # cluster in Ladder this agent is for.
@@ -16,6 +24,7 @@
 set -eu
 
 LADDER_URL="${LADDER_URL:-{{.PublicURL}}}"
+INSTALL_URL="${LADDER_INSTALL_URL:-$LADDER_URL/install}"
 NAMESPACE=ladder
 
 say() { printf '%s\n' "$*"; }
@@ -32,6 +41,7 @@ ask() {
 # json_field NAME: the string value of "NAME" in the JSON on stdin.
 json_field() { sed -n "s/.*\"$1\" *: *\"\([^\"]*\)\".*/\1/p"; }
 
+[ -n "$LADDER_URL" ] || fail "set LADDER_URL to the address of your Ladder: curl -fsSL <release>/install.sh | LADDER_URL=https://<Ladder> sh"
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v kubectl >/dev/null 2>&1 || fail "kubectl is required"
 
@@ -76,8 +86,8 @@ if printf '%s' "$body" | grep -q '"reconnected": *true'; then
 	say "Ladder already knows this cluster as $(printf '%s' "$body" | json_field clusterName): its agent gets a new token."
 fi
 
-show "curl -fsSL $LADDER_URL/install/agent.yaml | kubectl apply -f -"
-curl -fsSL "$LADDER_URL/install/agent.yaml" | kubectl apply -f -
+show "curl -fsSL $INSTALL_URL/agent.yaml | kubectl apply -f -"
+curl -fsSL "$INSTALL_URL/agent.yaml" | kubectl apply -f -
 
 # The token goes through a pipe, so it is neither on disk nor in the process list.
 show "kubectl apply -f -  # Secret $NAMESPACE/ladder-agent with the agent token"
