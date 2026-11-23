@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/ladder/ladder-agent/internal/kube"
@@ -125,5 +126,59 @@ func TestFailedNewPodRollsBack(t *testing.T) {
 	}
 	if s := u.Status(); s.State != protocol.UpgradeFailed || s.Error != problem {
 		t.Errorf("status = %+v", s)
+	}
+}
+
+// The agent runs a new version only by what Pin gives, such as a digest it
+// checked the signature of, and not at all where updates are turned off.
+func TestStartPins(t *testing.T) {
+	ctx := context.Background()
+	u, cs := newTestUpgrader(t)
+	u.OnStatus = func(protocol.AgentUpgrade) {}
+	var asked string
+	var noRegistry bool
+	u.Pin = func(_ context.Context, image string, local bool) (string, error) {
+		asked, noRegistry = image, local
+		if strings.HasSuffix(image, ":unsigned") {
+			return "", errors.New("the image has no signature")
+		}
+		return "registry.local:5000/ladder-agent@sha256:" + strings.Repeat("a", 64), nil
+	}
+	var perr *protocol.Error
+	if _, err := u.Start(ctx, ctx, "unsigned"); !errors.As(err, &perr) || perr.Code != protocol.CodeFailedPrecondition {
+		t.Fatalf("unsigned: %v", err)
+	}
+	if got := image(t, cs).Spec.Template.Spec.Containers[0].Image; got != "registry.local:5000/ladder-agent:1" {
+		t.Fatalf("unsigned image ran: %s", got)
+	}
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	st, err := u.Start(ctx, jobCtx, "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked != "registry.local:5000/ladder-agent:2" || noRegistry {
+		t.Errorf("Pin asked for %q, noRegistry %v", asked, noRegistry)
+	}
+	want := "registry.local:5000/ladder-agent@sha256:" + strings.Repeat("a", 64)
+	if got := image(t, cs).Spec.Template.Spec.Containers[0].Image; got != want || st.Image != want || st.To != "2" {
+		t.Errorf("runs %s, status %+v", got, st)
+	}
+
+	off, _ := newTestUpgrader(t)
+	off.Allowed = false
+	if _, err := off.Start(ctx, ctx, "2"); !errors.As(err, &perr) || perr.Code != protocol.CodeFailedPrecondition {
+		t.Fatalf("updates off: %v", err)
+	}
+}
+
+func TestHasRegistry(t *testing.T) {
+	for repo, want := range map[string]bool{
+		"ghcr.io/k8-ladder/ladder-agent": true, "registry.local:5000/ladder-agent": true,
+		"localhost/ladder-agent": true, "ladder-agent": false, "k8-ladder/ladder-agent": false,
+	} {
+		if got := hasRegistry(repo); got != want {
+			t.Errorf("%s: %v", repo, got)
+		}
 	}
 }

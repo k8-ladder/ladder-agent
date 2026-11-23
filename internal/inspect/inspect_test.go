@@ -296,3 +296,41 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncated = %v, %d bytes", res.Truncated, len(res.Text))
 	}
 }
+
+// The people who run the cluster turn reads off, logs off, or limit them to
+// some namespaces; the cloud cannot change that.
+func TestReadLimits(t *testing.T) {
+	r, calls := reader(nil, nil)
+	r.Off = true
+	if _, err := r.Read(context.Background(), protocol.KubeReadRequest{Op: "list", Kind: "pods", Namespace: "shop"}); err == nil {
+		t.Error("reads turned off, yet read")
+	}
+	r.Off, r.NoLogs = false, true
+	if _, err := r.Read(context.Background(), protocol.KubeReadRequest{Op: "logs", Namespace: "shop", Name: "web"}); err == nil {
+		t.Error("logs turned off, yet read")
+	}
+	r.NoLogs, r.Namespaces = false, []string{"shop-*"}
+	for _, req := range []protocol.KubeReadRequest{
+		{Op: "list", Kind: "pods"},
+		{Op: "list", Kind: "pods", Namespace: "kube-system"},
+		{Op: "get", Kind: "pods", Namespace: "argocd", Name: "x"},
+		{Op: "events"},
+		{Op: "events", Namespace: "billing"},
+		{Op: "logs", Namespace: "billing", Name: "web"},
+	} {
+		var perr *protocol.Error
+		if _, err := r.Read(context.Background(), req); !asProtocol(err, &perr) || perr.Code != protocol.CodeFailedPrecondition {
+			t.Errorf("%+v outside the namespaces: %v", req, err)
+		}
+	}
+	if len(*calls) > 0 {
+		t.Errorf("API calls: %+v", *calls)
+	}
+	// Inside them, and cluster-wide kinds, read.
+	if _, err := r.Read(context.Background(), protocol.KubeReadRequest{Op: "list", Kind: "nodes"}); err != nil && strings.Contains(err.Error(), "LADDER_READ_NAMESPACES") {
+		t.Errorf("nodes: %v", err)
+	}
+	if _, err := r.Read(context.Background(), protocol.KubeReadRequest{Op: "list", Kind: "pods", Namespace: "shop-prod"}); err != nil && strings.Contains(err.Error(), "LADDER_READ_NAMESPACES") {
+		t.Errorf("shop-prod: %v", err)
+	}
+}

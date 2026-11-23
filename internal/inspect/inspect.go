@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -19,7 +20,7 @@ import (
 	"github.com/ladder/ladder-agent/internal/protocol"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/validation/path"
+	validationpath "k8s.io/apimachinery/pkg/api/validation/path"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -52,6 +53,13 @@ type Reader struct {
 	// Raw GETs an API path, for tables and objects of any kind.
 	Raw func(ctx context.Context, path string, query url.Values, accept string) ([]byte, error)
 	Now func() time.Time
+
+	// What the people who run the cluster allow (LADDER_KUBE_READ,
+	// LADDER_APP_LOGS, LADDER_READ_NAMESPACES): Off refuses every read,
+	// NoLogs pod logs, and Namespaces, when set, limits namespaced reads to
+	// those namespaces, globs such as shop-*.
+	Off, NoLogs bool
+	Namespaces  []string
 }
 
 // New reads the cluster of k.
@@ -78,6 +86,12 @@ func New(k *kube.Clients) *Reader {
 func (r *Reader) Read(ctx context.Context, req protocol.KubeReadRequest) (*protocol.KubeReadResult, error) {
 	if err := CheckNames(req); err != nil {
 		return nil, err
+	}
+	if r.Off {
+		return nil, protocol.Errorf(protocol.CodeFailedPrecondition, "the people who run this cluster turned off cluster reads for the assistant (LADDER_KUBE_READ=off)")
+	}
+	if r.NoLogs && req.Op == protocol.KubeLogs {
+		return nil, protocol.Errorf(protocol.CodeFailedPrecondition, "the people who run this cluster turned off pod logs in Ladder (LADDER_APP_LOGS=off)")
 	}
 	var (
 		text string
@@ -128,7 +142,7 @@ func CheckNames(req protocol.KubeReadRequest) error {
 		}
 	}
 	if req.Name != "" {
-		if errs := path.IsValidPathSegmentName(req.Name); len(errs) > 0 {
+		if errs := validationpath.IsValidPathSegmentName(req.Name); len(errs) > 0 {
 			return protocol.Errorf(protocol.CodeBadRequest, "name %q is not an object name: %s", req.Name, strings.Join(errs, "; "))
 		}
 	}
@@ -138,6 +152,20 @@ func CheckNames(req protocol.KubeReadRequest) error {
 		}
 	}
 	return nil
+}
+
+// permit refuses a namespaced read outside Namespaces, when set, and one of
+// every namespace.
+func (r *Reader) permit(namespaced bool, namespace string) error {
+	if len(r.Namespaces) == 0 || !namespaced {
+		return nil
+	}
+	for _, glob := range r.Namespaces {
+		if ok, _ := path.Match(glob, namespace); ok && namespace != "" {
+			return nil
+		}
+	}
+	return protocol.Errorf(protocol.CodeFailedPrecondition, "the people who run this cluster let the assistant read only namespaces %s (LADDER_READ_NAMESPACES): name one of them", strings.Join(r.Namespaces, ", "))
 }
 
 // resource is a kind as the API serves it.
@@ -216,6 +244,9 @@ func (r *Reader) list(ctx context.Context, req protocol.KubeReadRequest) (string
 	if err != nil {
 		return "", err
 	}
+	if err := r.permit(res.namespaced, req.Namespace); err != nil {
+		return "", err
+	}
 	q := url.Values{"limit": {fmt.Sprint(maxRows)}, "includeObject": {"Metadata"}}
 	if req.LabelSelector != "" {
 		q.Set("labelSelector", req.LabelSelector)
@@ -292,6 +323,9 @@ func (r *Reader) get(ctx context.Context, req protocol.KubeReadRequest) (string,
 	if res.namespaced && req.Namespace == "" {
 		return "", protocol.Errorf(protocol.CodeBadRequest, "%s are namespaced: namespace is required", res.gvr.Resource)
 	}
+	if err := r.permit(res.namespaced, req.Namespace); err != nil {
+		return "", err
+	}
 	raw, err := r.Raw(ctx, res.path(req.Namespace, req.Name), nil, "application/json")
 	if err != nil {
 		return "", err
@@ -355,6 +389,9 @@ func (r *Reader) events(ctx context.Context, req protocol.KubeReadRequest) (stri
 			return "", err
 		}
 		sel["involvedObject.kind"] = res.kind
+	}
+	if err := r.permit(true, req.Namespace); err != nil {
+		return "", err
 	}
 	list, err := r.Kube.CoreV1().Events(req.Namespace).List(ctx, metav1.ListOptions{FieldSelector: sel.AsSelector().String()})
 	if err != nil {
@@ -432,6 +469,9 @@ func (r *Reader) logs(ctx context.Context, req protocol.KubeReadRequest) (string
 		if res, err := r.resolve(req.Kind); err != nil || res.gvr.Resource != "pods" || res.gvr.Group != "" {
 			return "", protocol.Errorf(protocol.CodeBadRequest, "logs are read from pods: list the pods of a %s first", req.Kind)
 		}
+	}
+	if err := r.permit(true, req.Namespace); err != nil {
+		return "", err
 	}
 	pod, err := r.Kube.CoreV1().Pods(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
 	if err != nil {

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"github.com/ladder/ladder-agent/internal/cluster"
 	"github.com/ladder/ladder-agent/internal/config"
 	"github.com/ladder/ladder-agent/internal/helmx"
+	"github.com/ladder/ladder-agent/internal/imagesig"
 	"github.com/ladder/ladder-agent/internal/inspect"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/link"
@@ -101,6 +103,11 @@ func run() error {
 	}
 	upgrader := upgrade.New(k, cfg.Namespace, Version, httpPort, log.With("component", "upgrade"))
 	upgrader.OnStatus = func(s protocol.AgentUpgrade) { be.Emit(protocol.EventAgentUpgrade, s) }
+	upgrader.Allowed = cfg.RemoteUpgrade
+	upgrader.Pin = func(ctx context.Context, image string, noRegistry bool) (string, error) {
+		v := &imagesig.Verifier{Policy: signaturePolicy(cfg, noRegistry), CachePath: "/tmp/sigstore"}
+		return v.Pin(ctx, image)
+	}
 	// Two agents run while one replaces the other: never during setup.
 	upgrader.Busy = func() string {
 		if engine.Status().State == protocol.SetupRunning {
@@ -159,6 +166,7 @@ func run() error {
 		return &protocol.ArgoCDCredentials{Username: user, Password: password}, nil
 	})
 	reader := inspect.New(k)
+	reader.Off, reader.NoLogs, reader.Namespaces = !cfg.KubeRead, !cfg.AppLogs, cfg.ReadNamespaces
 	be.Handle(protocol.MethodAppSecretsCreate, func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.AppSecretsCreate
 		if json.Unmarshal(raw, &req) != nil {
@@ -181,6 +189,9 @@ func run() error {
 		return watcher.Events(ctx, req.App)
 	})
 	be.Handle(protocol.MethodAppLogs, func(ctx context.Context, raw json.RawMessage) (any, error) {
+		if !cfg.AppLogs {
+			return nil, protocol.Errorf(protocol.CodeFailedPrecondition, "the people who run this cluster turned off pod logs in Ladder (LADDER_APP_LOGS=off)")
+		}
 		var req protocol.AppLogsRequest
 		if err := decode(raw, &req); err != nil {
 			return nil, err
@@ -210,6 +221,15 @@ func run() error {
 	be.Run(ctx)
 	log.Info("shutting down")
 	return nil
+}
+
+// signaturePolicy is what an image must carry before the agent runs it
+// (spec §5.9): a signature by Ladder's release workflow, unless the people
+// who run the cluster turned it off or the agent's own image is in no
+// registry, as install-local.sh imports it into k3d.
+func signaturePolicy(cfg config.Config, noRegistry bool) imagesig.Policy {
+	off := cfg.Signature == "off" || cfg.Signature == "" && noRegistry
+	return imagesig.Policy{Off: off, Issuer: cmp.Or(cfg.SignerIssuer, imagesig.DefaultIssuer), Signer: cmp.Or(cfg.Signer, imagesig.DefaultSigner)}
 }
 
 func helloInfo(ctx context.Context, k *kube.Clients) (protocol.Hello, error) {

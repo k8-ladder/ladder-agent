@@ -52,6 +52,14 @@ type Upgrader struct {
 	log  *slog.Logger
 
 	// OnStatus receives every change of the upgrade.
+	// Allowed is false where the people who run the cluster turned off
+	// updates from the cloud.
+	Allowed bool
+	// Pin checks the image and returns the reference to run it by, such as
+	// repository@digest; nil runs it by tag. noRegistry says the agent's
+	// own image is in no registry, as install-local.sh imports it.
+	Pin func(ctx context.Context, image string, noRegistry bool) (string, error)
+
 	OnStatus func(protocol.AgentUpgrade)
 	// Busy returns why the agent cannot be replaced now, or "".
 	Busy func() string
@@ -61,7 +69,7 @@ type Upgrader struct {
 }
 
 func New(k *kube.Clients, namespace, version string, port int, log *slog.Logger) *Upgrader {
-	return &Upgrader{k: k, namespace: namespace, version: version, port: port, log: log}
+	return &Upgrader{k: k, namespace: namespace, version: version, port: port, log: log, Allowed: true}
 }
 
 // Status is the last upgrade, or nil.
@@ -80,6 +88,10 @@ func (u *Upgrader) Status() *protocol.AgentUpgrade {
 // new one is ready, the upgrade is done. Only a tag of the image this agent
 // runs from is accepted, so the cloud cannot make the agent run another image.
 func (u *Upgrader) Start(ctx, jobCtx context.Context, version string) (protocol.AgentUpgrade, error) {
+	if !u.Allowed {
+		return protocol.AgentUpgrade{}, protocol.Errorf(protocol.CodeFailedPrecondition,
+			"updates from Ladder are turned off in this cluster (LADDER_REMOTE_UPGRADE=off): kubectl -n %s set image deploy/%s %s=<image>", u.namespace, Deployment, Container)
+	}
 	if !tagRe.MatchString(version) {
 		return protocol.AgentUpgrade{}, protocol.Errorf(protocol.CodeBadRequest, "%q is not an image tag", version)
 	}
@@ -110,6 +122,13 @@ func (u *Upgrader) Start(ctx, jobCtx context.Context, version string) (protocol.
 		return protocol.AgentUpgrade{}, fmt.Errorf("deployment %s has no container %s", Deployment, Container)
 	}
 	image := repository(old) + ":" + version
+	if u.Pin != nil {
+		pinned, err := u.Pin(ctx, image, !hasRegistry(repository(old)))
+		if err != nil {
+			return protocol.AgentUpgrade{}, protocol.Errorf(protocol.CodeFailedPrecondition, "the agent does not run %s: %v", image, err)
+		}
+		image = pinned
+	}
 	if err := u.patch(ctx, image); err != nil {
 		return protocol.AgentUpgrade{}, err
 	}
@@ -237,6 +256,13 @@ func repository(image string) string {
 		image = image[:i]
 	}
 	return image
+}
+
+// hasRegistry reports whether repository names a registry, as
+// ghcr.io/k8-ladder/ladder-agent does and ladder-agent does not.
+func hasRegistry(repository string) bool {
+	host, _, ok := strings.Cut(repository, "/")
+	return ok && (strings.ContainsAny(host, ".:") || host == "localhost")
 }
 
 func or(s, def string) string {

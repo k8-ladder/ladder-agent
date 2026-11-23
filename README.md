@@ -75,6 +75,11 @@ watcher and setup work as in the cluster.
 | `ARGOCD_CHART_REPO` | `https://argoproj.github.io/argo-helm` | |
 | `HTTP_ADDR` | `:8081` | `/healthz` and `/readyz` |
 | `LOG_LEVEL` | `info` | |
+| `LADDER_REMOTE_UPGRADE` | on | `off` refuses `agent.upgrade` from the cloud |
+| `LADDER_AGENT_SIGNATURE` | `off` for an image in no registry, else `keyless` | `keyless` runs only images the release workflow signed, by digest |
+| `LADDER_AGENT_SIGNER`, `LADDER_AGENT_SIGNER_ISSUER` | `agent.yml` of `k8-ladder/ladder` on `main`, GitHub Actions | the signer's identity, a regular expression, and its OIDC issuer |
+| `LADDER_KUBE_READ`, `LADDER_APP_LOGS` | on | `off` refuses the assistant's reads, pod logs |
+| `LADDER_READ_NAMESPACES` | all | comma-separated globs the assistant's namespaced reads must match |
 
 ## Known gaps in the POC
 

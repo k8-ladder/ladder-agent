@@ -158,6 +158,10 @@ change, create, delete or exec anything.
 - `kind` is a kind, resource or short name as kubectl takes them: `Pod`, `deployments`, `deploy`,
   `applications.argoproj.io`. A kind the cluster does not serve, a missing object or a bad selector is
   `bad_request`, with the API server's message.
+- The cluster's people may turn reads off (`LADDER_KUBE_READ=off`), pod logs off
+  (`LADDER_APP_LOGS=off`, which also refuses `app.logs`), or limit namespaced reads to some
+  namespaces (`LADDER_READ_NAMESPACES`, comma-separated globs; a read of all namespaces is then
+  refused): `failed_precondition`, saying so.
 - `namespace` and `container` must be DNS labels and `name` a path segment the API server takes (no
   `/`, no `%`, not `.` or `..`); anything else is `bad_request` before any API call. The agent builds
   the API path of them for objects of any kind, and `../secrets/x` through `configmaps` would read a
@@ -282,7 +286,15 @@ agents before them: the cloud gives Argo CD its sslip.io host only when `hosts` 
 ## Upgrade
 
 `agent.upgrade` runs `version` as a tag of the image repository the agent runs from: the cloud
-cannot pick another image. The agent sets the tag in its Deployment, together with what an older
+cannot pick another image. Unless its policy is off, the agent resolves the tag to a digest, reads
+the Sigstore bundles that refer to it (OCI referrers of artifact type
+`application/vnd.dev.sigstore.bundle.v0.3+json`), and needs one that verifies against Sigstore's
+trusted root (TUF): a Fulcio certificate of `LADDER_AGENT_SIGNER` (default the workflow
+`agent.yml` of `k8-ladder/ladder` on `main`) from `LADDER_AGENT_SIGNER_ISSUER` (default GitHub
+Actions), a certificate transparency timestamp, a Rekor entry, and the in-toto statement
+`https://sigstore.dev/cosign/sign/v1` about that digest. It then runs `repository@sha256:…`. The
+policy is `LADDER_AGENT_SIGNATURE`: `keyless`, `off`, or by default `off` only for an agent whose
+image names no registry. `LADDER_REMOTE_UPGRADE=off` refuses the method. The agent sets the image in its Deployment, together with what an older
 install lacks: `RollingUpdate` with `maxUnavailable: 0`, the readiness probe `/readyz`, and
 `POD_NAME`. The new pod is ready once it has connected to the cloud, so the old agent keeps running
 until then. When the new agent connects, the backend drops the old connection with
@@ -292,7 +304,8 @@ Kubernetes can stop it. The upgrade is done when an agent of the new version sen
 The old agent fails the upgrade when a new pod's image does not pull, its container cannot be
 created, it exits, or it is not ready within 5 minutes. It then sets its own image back and pushes
 `agent.upgrade` with `state: failed` and `error`. Errors: `bad_request` for a tag that is not valid,
-`failed_precondition` for the version that runs already, `conflict` while setup or another
+`failed_precondition` for the version that runs already, an image without a valid signature,
+or updates turned off, `conflict` while setup or another
 upgrade runs. A new agent resumes an interrupted setup only once it is the Deployment's only pod.
 
 ## Refresh
