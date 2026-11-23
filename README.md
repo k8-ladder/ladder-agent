@@ -24,10 +24,11 @@ Git hosting, YAML edits and the API for the UI belong to `ladder-be`. The wire c
 | Path | What |
 |---|---|
 | `cmd/agent` | the agent |
-| `cmd/fakebe` | a stand-in backend for development; renders a minimal starter repository from `cmd/fakebe/starter` |
+| `cmd/fakebe` | a stand-in backend for development; `GET /starter` renders a minimal starter repository from `cmd/fakebe/starter` |
 | `internal/protocol` | wire types |
 | `internal/link` | WebSocket client: reconnect, request dispatch, events |
 | `internal/cluster` | cluster facts |
+| `internal/platform` | the platform from the agent's image: Argo CD's values, the projects, the Applications of Argo CD, Traefik, cert-manager and Metrics Server, the ApplicationSet of apps, the deployer apps sync as and the policies for apps' namespaces; Argo CD's sslip.io host |
 | `internal/argo` | Application watcher |
 | `internal/inspect` | `kube.read`: objects, events and logs for the assistant |
 | `internal/setup` | setup engine, steps, state |
@@ -78,8 +79,9 @@ watcher and setup work as in the cluster.
 ## Known gaps in the POC
 
 - The agent only creates Argo CD's repository Secret. Creating the repository and committing the
-  starter files is the backend's job, before `setup.apply`.
+  starter files (apps and their charts) is the backend's job, before `setup.apply`.
 - A Helm release left `pending-install` by a killed pod stops the Argo CD step with a manual hint.
 - The watcher picks the Argo CD namespace at startup. Setting up into a non-default namespace needs
   an agent restart to watch it.
-- Unit tests cover the sync check of setup, the watcher, cluster reads, logs and the upgrade.
+- Unit tests cover the sync check of setup, the platform's rendering and move from git, the watcher,
+  cluster reads, logs and the upgrade. Applying the platform needs a real cluster (k3d).

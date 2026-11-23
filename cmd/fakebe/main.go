@@ -12,9 +12,9 @@
 //	curl -X POST localhost:9000/argocd/refresh
 //	curl -X POST localhost:9000/kube -d '{"op":"list","kind":"pods","namespace":"argocd"}'
 //
-// For setup.apply it renders a minimal starter repository from ./starter. The
-// repository at repoURL must hold those files already: the real cloud
-// commits them before setup.apply.
+// ./starter is a minimal starter repository for the repository at repoURL,
+// which must hold it before setup.apply: the real cloud commits it. Print it
+// with "curl localhost:9000/starter".
 package main
 
 import (
@@ -58,6 +58,15 @@ func main() {
 	mux.HandleFunc("POST /setup/plan", b.forward(protocol.MethodSetupPlan))
 	mux.HandleFunc("POST /setup/retry", b.forward(protocol.MethodSetupRetry))
 	mux.HandleFunc("POST /setup/apply", b.apply)
+	mux.HandleFunc("GET /starter", func(w http.ResponseWriter, r *http.Request) {
+		files, err := renderStarter(map[string]any{"WriteMode": protocol.WriteModeCommit})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(files)
+	})
 	mux.HandleFunc("GET /argocd/credentials", b.forward(protocol.MethodArgoCDCredentials))
 	mux.HandleFunc("POST /argocd/refresh", b.forward(protocol.MethodArgoCDRefresh))
 	mux.HandleFunc("POST /kube", b.forward(protocol.MethodKubeRead))
@@ -166,8 +175,8 @@ func (b *backend) forward(method string) http.HandlerFunc {
 	}
 }
 
-// apply asks the agent for the plan (to learn the repository URL and Argo CD
-// choice), renders the starter repository, then sends setup.apply.
+// apply checks the plan with the agent, then sends setup.apply. The agent
+// applies the platform from its own image; the repository needs only apps.
 func (b *backend) apply(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
@@ -182,28 +191,9 @@ func (b *backend) apply(w http.ResponseWriter, r *http.Request) {
 		reply(w, env, err)
 		return
 	}
-	var result protocol.SetupPlanResult
-	if err := json.Unmarshal(env.Payload, &result); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
 	if plan.WriteMode == "" {
 		plan.WriteMode = protocol.WriteModeCommit
 	}
-	files, err := renderStarter(map[string]any{
-		"RepoURL":            result.RepoURL,
-		"ArgoCDNamespace":    result.ArgoCD.Namespace,
-		"ArgoCDVersion":      result.ArgoCD.Version,
-		"ArgoCDChartVersion": result.ArgoCD.ChartVersion,
-		"Exposure":           result.ArgoCD.Exposure,
-		"Host":               result.ArgoCD.Host,
-		"WriteMode":          plan.WriteMode,
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	plan.Files = files
 	raw, _ = json.Marshal(plan)
 	env, err = b.call(ctx, protocol.MethodSetupApply, raw)
 	reply(w, env, err)

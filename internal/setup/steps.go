@@ -10,6 +10,7 @@ import (
 
 	"github.com/ladder/ladder-agent/internal/helmx"
 	"github.com/ladder/ladder-agent/internal/kube"
+	"github.com/ladder/ladder-agent/internal/platform"
 	"github.com/ladder/ladder-agent/internal/protocol"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -17,15 +18,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/yaml"
 )
 
 const (
 	repoSecretName = "repo-deploy"
 	argoRelease    = "argocd"
 	argoChart      = "argo-cd"
-	// argoIngress is declared in platform/argocd/values.yaml (extraObjects).
-	argoIngress = "argocd-server"
+	// stepPlatformID runs again on every retry (Engine.Retry).
+	stepPlatformID = "platform"
 )
 
 // step is one row of the setup progress list. done is the "done when" check:
@@ -58,7 +58,7 @@ func (e *Engine) steps(p *protocol.SetupPlan) []step {
 			diagnose: func(ctx context.Context) string { return kube.Diagnose(ctx, e.k, ns) },
 		},
 		e.stepRepoSecret(p),
-		e.stepRootApp(p),
+		e.stepPlatform(p),
 		e.stepSync(p),
 		e.stepSaveConnection(p),
 	}
@@ -106,7 +106,7 @@ func (e *Engine) stepArgoInstall(p *protocol.SetupPlan) step {
 	return step{
 		id:      "argocd-install",
 		title:   "Install Argo CD",
-		command: fmt.Sprintf("helm install %s argo/%s -n %s --create-namespace --version %s -f %s", argoRelease, argoChart, ns, p.ArgoCD.ChartVersion, fileArgoCDValues),
+		command: fmt.Sprintf("helm install %s argo/%s -n %s --create-namespace --version %s -f argocd.yaml  # values from the agent's image", argoRelease, argoChart, ns, p.ArgoCD.ChartVersion),
 		timeout: 10 * time.Minute,
 		done: func(ctx context.Context) (bool, error) {
 			rel, err := e.helm.Status(ns, argoRelease)
@@ -137,8 +137,8 @@ func (e *Engine) stepArgoInstall(p *protocol.SetupPlan) step {
 					return err
 				}
 			}
-			var values map[string]any
-			if err := yaml.Unmarshal([]byte(p.Files[fileArgoCDValues]), &values); err != nil {
+			_, pl, err := e.render(ctx, p)
+			if err != nil {
 				return err
 			}
 			// The label marks this Argo CD as Ladder's for the cluster check.
@@ -151,7 +151,7 @@ func (e *Engine) stepArgoInstall(p *protocol.SetupPlan) step {
 				RepoURL:     e.cfg.ArgoCDChartRepo,
 				Chart:       argoChart,
 				Version:     p.ArgoCD.ChartVersion,
-				Values:      values,
+				Values:      pl.ArgoCDValues,
 				Timeout:     10 * time.Minute,
 			})
 		},
@@ -233,39 +233,31 @@ func (e *Engine) stepRepoSecret(p *protocol.SetupPlan) step {
 	}
 }
 
-func (e *Engine) stepRootApp(p *protocol.SetupPlan) step {
+// stepPlatform applies the platform from the agent's image: the projects, the
+// Applications of Argo CD and the other charts, the ApplicationSet of apps,
+// the ServiceAccount apps sync as and the policies that keep them in their
+// namespaces (package platform).
+func (e *Engine) stepPlatform(p *protocol.SetupPlan) step {
 	ns := p.ArgoCD.Namespace
-	const name = "root"
 	return step{
-		id:      "root-app",
-		title:   "Apply root Application",
-		command: "kubectl apply -f " + fileRootApp,
-		timeout: time.Minute,
-		done: func(ctx context.Context) (bool, error) {
-			_, err := e.k.Dynamic.Resource(kube.ApplicationGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
-			return err == nil, err
-		},
+		id:      stepPlatformID,
+		title:   "Apply the platform",
+		command: fmt.Sprintf("kubectl -n %s apply --server-side -f platform.yaml  # projects, Applications and policies from the agent's image", ns),
+		timeout: 2 * time.Minute,
 		run: func(ctx context.Context) error {
-			obj := &unstructured.Unstructured{}
-			if err := yaml.Unmarshal([]byte(p.Files[fileRootApp]), &obj.Object); err != nil {
-				return fmt.Errorf("%s: %w", fileRootApp, err)
+			params, pl, err := e.render(ctx, p)
+			if err != nil {
+				return err
 			}
-			if obj.GetNamespace() == "" {
-				obj.SetNamespace(ns)
-			}
-			_, err := e.k.Apply(ctx, obj)
-			return err
+			return platform.Apply(ctx, e.k, params, pl, e.log, time.Now())
 		},
 	}
 }
 
 func (e *Engine) stepSync(p *protocol.SetupPlan) step {
 	ns := p.ArgoCD.Namespace
-	apps := []string{"root", "argocd", "appsets"}
-	if p.Files["bootstrap/metrics-server.yaml"] != "" {
+	apps := []string{"argocd"}
+	if p.MetricsServer != nil && *p.MetricsServer {
 		apps = append(apps, "metrics-server")
 	}
 	check := func(ctx context.Context) (bool, []string, error) {

@@ -1,0 +1,25 @@
+# Argo CD's UI through the cluster's default ingress class, on path /argocd
+# (spec §5.6). The agent makes it once and leaves it to people afterwards;
+# where Ladder adds Traefik, the agent gives it the host
+# argocd.<address>.sslip.io and a certificate once the load balancer has an
+# address.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: [[ .ArgoCDNamespace ]]
+[[- if .Traefik ]]
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+[[- end ]]
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /argocd
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80

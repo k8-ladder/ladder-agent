@@ -1,0 +1,36 @@
+# Helm values for cert-manager, which gets certificates from Let's Encrypt for
+# the Ingresses that ask for one, where Ladder adds Traefik. Argo CD installs
+# it with these values through the Application cert-manager, which the agent
+# applies. Override them in ConfigMap ladder/ladder-platform, key
+# cert-manager.yaml.
+crds:
+  enabled: true
+# Argo CD runs Helm hooks on every sync. The retries of the Application
+# cert-manager do the job of this check.
+startupapicheck:
+  enabled: false
+# An Ingress asks for a certificate with the annotation
+# cert-manager.io/cluster-issuer: letsencrypt and a tls entry for its host,
+# whose certificate cert-manager keeps in the entry's Secret. Let's Encrypt
+# checks the host over HTTP through Traefik: the host has to point at
+# Traefik's load balancer.
+extraObjects:
+  - |
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata:
+      name: letsencrypt
+      annotations:
+        # After cert-manager's webhook is up, and without a dry run, which
+        # fails before the CRD exists.
+        argocd.argoproj.io/sync-wave: "1"
+        argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    spec:
+      acme:
+        server: https://acme-v02.api.letsencrypt.org/directory
+        privateKeySecretRef:
+          name: letsencrypt-account
+        solvers:
+          - http01:
+              ingress:
+                ingressClassName: traefik

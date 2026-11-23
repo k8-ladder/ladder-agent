@@ -27,6 +27,7 @@ import (
 	"github.com/ladder/ladder-agent/internal/inspect"
 	"github.com/ladder/ladder-agent/internal/kube"
 	"github.com/ladder/ladder-agent/internal/link"
+	"github.com/ladder/ladder-agent/internal/platform"
 	"github.com/ladder/ladder-agent/internal/protocol"
 	"github.com/ladder/ladder-agent/internal/setup"
 	"github.com/ladder/ladder-agent/internal/upgrade"
@@ -78,6 +79,7 @@ func run() error {
 	go func() {
 		if err := upgrade.WaitAlone(ctx, k, cfg.Namespace, os.Getenv("POD_NAME")); err == nil {
 			engine.Resume()
+			engine.StartPlatform()
 		}
 	}()
 
@@ -144,12 +146,16 @@ func run() error {
 	be.Handle(protocol.MethodArgoCDRefresh, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return struct{}{}, argo.Refresh(ctx, k, argoNS)
 	})
+	// Argo CD's read-only account; the admin password stays in the cluster.
 	be.Handle(protocol.MethodArgoCDCredentials, func(ctx context.Context, _ json.RawMessage) (any, error) {
-		ns := engine.ArgoCDNamespace()
-		if ns == "" {
-			ns = cfg.ArgoCDNamespace
+		user, password, err := platform.ViewerCredentials(ctx, k, cfg.Namespace)
+		if errors.Is(err, platform.ErrNoViewer) {
+			return nil, protocol.Errorf(protocol.CodeFailedPrecondition, "%v: the agent makes it when it applies the platform", err)
 		}
-		return argo.InitialCredentials(ctx, k, ns)
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.ArgoCDCredentials{Username: user, Password: password}, nil
 	})
 	reader := inspect.New(k)
 	be.Handle(protocol.MethodAppSecretsCreate, func(ctx context.Context, raw json.RawMessage) (any, error) {

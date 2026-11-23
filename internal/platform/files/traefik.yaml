@@ -1,0 +1,16 @@
+# Helm values for Traefik, the cluster's ingress controller, where Ladder adds
+# it (spec §5.12). Argo CD installs it with these values through the
+# Application traefik, which the agent applies. Override them in ConfigMap
+# ladder/ladder-platform, key traefik.yaml (spec §5.6).
+
+# The cluster's default ingress class: Ingresses without a class, such as
+# Argo CD's, go through Traefik.
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+service:
+  spec:
+    # The cloud puts a load balancer in front of Traefik, on ports 80 and 443,
+    # and bills it. Its address is the one every Ingress reports, where the
+    # hosts of apps point in DNS.
+    type: LoadBalancer

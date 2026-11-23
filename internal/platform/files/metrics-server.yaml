@@ -1,0 +1,10 @@
+# Live CPU and memory for Ladder's Used now readings and Kubernetes autoscaling,
+# where the cluster has no Metrics API. Argo CD manages this chart through the
+# Application metrics-server, which the agent applies. Override these values in
+# ConfigMap ladder/ladder-platform, key metrics-server.yaml.
+# The chart prefers nodes' internal IPs and collects a reading every 15 seconds.
+replicas: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 200Mi

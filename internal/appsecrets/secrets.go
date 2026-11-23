@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ladder/ladder-agent/internal/kube"
+	"github.com/ladder/ladder-agent/internal/platform"
 	"github.com/ladder/ladder-agent/internal/protocol"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -46,13 +47,23 @@ func Create(ctx context.Context, k *kube.Clients, req protocol.AppSecretsCreate)
 	// Typed clients avoid kubectl's last-applied annotation and any echo of
 	// submitted values. Kubernetes/admission errors may contain the request:
 	// return only fixed messages to the cloud and the link logger.
-	if _, err := k.Kube.CoreV1().Namespaces().Get(ctx, req.Namespace, metav1.GetOptions{}); apierrors.IsNotFound(err) {
-		_, err = k.Kube.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: req.Namespace}}, metav1.CreateOptions{})
-		if err != nil && !apierrors.IsAlreadyExists(err) {
+	// The namespace of an app is one Ladder made, labelled so: apps sync
+	// only into those (spec §5.8), and no other namespace gets Secrets.
+	ns, err := k.Kube.CoreV1().Namespaces().Get(ctx, req.Namespace, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = k.Kube.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: req.Namespace, Labels: map[string]string{platform.AppsLabel: "true"},
+		}}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			return protocol.Errorf(protocol.CodeConflict, "The app namespace was just made; try again")
+		}
+		if err != nil {
 			return protocol.Errorf(protocol.CodeInternal, "Could not create the app namespace")
 		}
 	} else if err != nil {
 		return protocol.Errorf(protocol.CodeInternal, "Could not read the app namespace")
+	} else if ns.Labels[platform.AppsLabel] != "true" {
+		return protocol.Errorf(protocol.CodeFailedPrecondition, "Namespace %s is not one Ladder made for apps (label %s=true)", req.Namespace, platform.AppsLabel)
 	}
 	immutable := true
 	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
@@ -60,7 +71,7 @@ func Create(ctx context.Context, k *kube.Clients, req protocol.AppSecretsCreate)
 		Labels: map[string]string{"ladder.dev/app-secrets": req.App},
 	}, Type: corev1.SecretTypeOpaque, Immutable: &immutable, Data: data}
 	secrets := k.Kube.CoreV1().Secrets(req.Namespace)
-	_, err := secrets.Create(ctx, s, metav1.CreateOptions{})
+	_, err = secrets.Create(ctx, s, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
 		// Retrying a failed Git write is safe, but a version never changes.
 		cur, readErr := secrets.Get(ctx, req.Name, metav1.GetOptions{})

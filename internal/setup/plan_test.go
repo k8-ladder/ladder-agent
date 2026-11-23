@@ -22,9 +22,6 @@ func ladderPlan() protocol.SetupPlan {
 		Owner:    "acme",
 		Repo:     "prod",
 		RepoURL:  "https://ladder.example.com/git/acme/prod.git",
-		Files: map[string]string{
-			fileLadder: "branch: main\n", fileRootApp: "kind: Application\n", fileArgoCDValues: "configs: {}\n",
-		},
 		Credentials: &protocol.RepoCredentials{Username: "ladder-c-1", Password: "token-1"},
 	}
 }
@@ -107,12 +104,20 @@ func TestGitHubDeployKey(t *testing.T) {
 }
 
 func TestPrepareLadder(t *testing.T) {
-	e := &Engine{cfg: config.Config{ArgoCDNamespace: "argocd", ArgoCDVersion: "3.5.3", ArgoCDChartVersion: "10.9.6"}}
-	p, err := e.prepare(context.Background(), ladderPlan(), true)
+	e := &Engine{cfg: config.Config{Namespace: "ladder", ArgoCDNamespace: "argocd", ArgoCDVersion: "3.5.3", ArgoCDChartVersion: "10.9.6"}}
+	in := ladderPlan()
+	// A cloud cannot pick Argo CD's version, nor have the agent take the
+	// Metrics Server decision from it; old clouds' files are dropped.
+	in.ArgoCD.ChartVersion, in.ArgoCD.Version = "1.0.0", "1.0"
+	yes := true
+	in.MetricsServer = &yes
+	in.Files = map[string]string{"bootstrap/root.yaml": "kind: Application\n"}
+	p, err := e.prepare(context.Background(), in, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.WriteMode != protocol.WriteModeCommit || p.ArgoCD.Namespace != "argocd" || p.ArgoCD.Exposure != "ingress" || p.ArgoCD.ChartVersion != "10.9.6" {
+	if p.WriteMode != protocol.WriteModeCommit || p.ArgoCD.Namespace != "argocd" || p.ArgoCD.Exposure != "ingress" ||
+		p.ArgoCD.ChartVersion != "10.9.6" || p.ArgoCD.Version != "3.5.3" || p.MetricsServer != nil || p.Files != nil {
 		t.Errorf("defaults not filled in: %+v", p)
 	}
 	if p.RepoURL != "https://ladder.example.com/git/acme/prod.git" {
@@ -126,7 +131,8 @@ func TestPrepareLadder(t *testing.T) {
 		"ssh repoURL":     func(p *protocol.SetupPlan) { p.RepoURL = "git@ladder.example.com:acme/prod.git" },
 		"no credentials":  func(p *protocol.SetupPlan) { p.Credentials = nil },
 		"no password":     func(p *protocol.SetupPlan) { p.Credentials.Password = "" },
-		"no starter file": func(p *protocol.SetupPlan) { delete(p.Files, fileRootApp) },
+		"agent namespace": func(p *protocol.SetupPlan) { p.ArgoCD.Namespace = "ladder" },
+		"kube namespace":  func(p *protocol.SetupPlan) { p.ArgoCD.Namespace = "kube-system" },
 		"old local":       func(p *protocol.SetupPlan) { p.Provider = "local" },
 	} {
 		in := ladderPlan()
@@ -136,7 +142,7 @@ func TestPrepareLadder(t *testing.T) {
 		}
 	}
 	// setup.plan needs no credentials and ignores the files.
-	in := ladderPlan()
+	in = ladderPlan()
 	in.Credentials = nil
 	if p, err := e.prepare(context.Background(), in, false); err != nil || p.Files != nil {
 		t.Errorf("plan without credentials: %v, files %v", err, p)

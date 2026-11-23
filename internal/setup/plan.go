@@ -3,11 +3,13 @@ package setup
 import (
 	"context"
 	"fmt"
+	"time"
 	"net/url"
 	"regexp"
+	"strings"
 
+	"github.com/ladder/ladder-agent/internal/platform"
 	"github.com/ladder/ladder-agent/internal/protocol"
-	"sigs.k8s.io/yaml"
 )
 
 var (
@@ -15,18 +17,14 @@ var (
 	dnsLabelRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 )
 
-const (
-	fileLadder       = "ladder.yaml"
-	fileRootApp      = "bootstrap/root.yaml"
-	fileArgoCDValues = "platform/argocd/values.yaml"
-)
 
 func badRequest(format string, args ...any) error {
 	return protocol.Errorf(protocol.CodeBadRequest, format, args...)
 }
 
 // prepare validates the request and fills in defaults. With forApply it also
-// requires the starter files.
+// requires the repository's credentials. Files from older clouds are dropped:
+// the platform comes from the agent (package platform).
 func (e *Engine) prepare(ctx context.Context, in protocol.SetupPlan, forApply bool) (*protocol.SetupPlan, error) {
 	p := in
 	if p.WriteMode == "" {
@@ -73,14 +71,14 @@ func (e *Engine) prepare(ctx context.Context, in protocol.SetupPlan, forApply bo
 	}
 
 	a := &p.ArgoCD
-	if a.Version == "" {
-		a.Version = e.cfg.ArgoCDVersion
-	}
-	if a.ChartVersion == "" {
-		a.ChartVersion = e.cfg.ArgoCDChartVersion
-	}
+	// The agent's own Argo CD version, whatever the cloud asks: the platform
+	// comes from the agent's image, and a cloud cannot pick an older one.
+	a.Version, a.ChartVersion = e.cfg.ArgoCDVersion, e.cfg.ArgoCDChartVersion
 	if a.Namespace == "" {
 		a.Namespace = e.cfg.ArgoCDNamespace
+	}
+	if a.Namespace == e.cfg.Namespace || strings.HasPrefix(a.Namespace, "kube-") {
+		return nil, badRequest("argocd.namespace %q is the agent's or Kubernetes' own", a.Namespace)
 	}
 	if a.Exposure == "" {
 		a.Exposure = "ingress"
@@ -92,19 +90,8 @@ func (e *Engine) prepare(ctx context.Context, in protocol.SetupPlan, forApply bo
 		return nil, badRequest("argocd.exposure must be \"ingress\" or \"port-forward\"")
 	}
 
-	if !forApply {
-		p.Files = nil
-		return &p, nil
-	}
-	for _, f := range []string{fileLadder, fileRootApp, fileArgoCDValues} {
-		if p.Files[f] == "" {
-			return nil, badRequest("files[%q] is required", f)
-		}
-	}
-	var v map[string]any
-	if err := yaml.Unmarshal([]byte(p.Files[fileArgoCDValues]), &v); err != nil {
-		return nil, badRequest("%s: %v", fileArgoCDValues, err)
-	}
+	p.Files = nil
+	p.MetricsServer = nil
 	return &p, nil
 }
 
@@ -116,10 +103,65 @@ func (e *Engine) clusterObjects(p *protocol.SetupPlan) []protocol.ClusterObject 
 	}
 	add("HelmRelease", ns, argoRelease, "argo-cd chart "+p.ArgoCD.ChartVersion+", Argo CD "+p.ArgoCD.Version)
 	if p.ArgoCD.Exposure == "ingress" {
-		add("Ingress", ns, argoIngress, "Argo CD UI on path /argocd, from "+fileArgoCDValues)
+		add("Ingress", ns, platform.Ingress, "Argo CD UI on path /argocd")
 	}
 	add("Secret", ns, repoSecretName, "repository credentials for Argo CD, not in git")
-	add("Application", ns, "root", "from "+fileRootApp)
+	add("AppProject", ns, "default", "locked: may deploy nothing")
+	add("AppProject", ns, platform.Project, "the charts below, from their Helm repositories only")
+	add("AppProject", ns, "apps", "apps from the repository, synced as "+platform.Deployer)
+	params := e.planParams(p)
+	for _, c := range platform.Components(params) {
+		add("Application", ns, c.Name, c.Chart+" chart "+c.Version+", "+c.Note)
+	}
+	add("ApplicationSet", ns, "apps", "one Application per apps/<name>/app.yaml")
+	add("ServiceAccount", ns, platform.Deployer, "apps sync as it: admin in the namespaces of apps")
+	add("ValidatingAdmissionPolicy", "", "ladder-apps-baseline", "pods in the namespaces of apps meet the baseline Pod Security Standard")
+	add("ValidatingAdmissionPolicy", "", "ladder-apps-namespaces", "apps go only into namespaces labelled "+platform.AppsLabel)
+	add("Secret", e.cfg.Namespace, platform.ViewerSecret, "password of Argo CD's read-only account "+platform.ViewerUser)
 	add("Secret", e.cfg.Namespace, ConnectionSecret, "provider, repository URL, Argo CD settings")
 	return objs
+}
+
+// planParams are the platform's settings in plan p, without the read-only
+// account's password and people's overrides.
+func (e *Engine) planParams(p *protocol.SetupPlan) platform.Params {
+	return platform.Params{
+		ArgoCDNamespace:    p.ArgoCD.Namespace,
+		ArgoCDChartRepo:    e.cfg.ArgoCDChartRepo,
+		ArgoCDChartVersion: e.cfg.ArgoCDChartVersion,
+		ArgoCDVersion:      e.cfg.ArgoCDVersion,
+		AgentNamespace:     e.cfg.Namespace,
+		RepoURL:            p.RepoURL,
+		Exposure:           p.ArgoCD.Exposure,
+		Traefik:            p.Traefik,
+		MetricsServer:      p.MetricsServer != nil && *p.MetricsServer,
+	}
+}
+
+// render makes the platform of plan p: it reads people's overrides and makes
+// the read-only account's password the first time.
+func (e *Engine) render(ctx context.Context, p *protocol.SetupPlan) (platform.Params, *platform.Platform, error) {
+	params := e.planParams(p)
+	v, err := platform.EnsureViewer(ctx, e.k, e.cfg.Namespace, time.Now())
+	if err != nil {
+		return params, nil, fmt.Errorf("Argo CD's read-only account: %w", err)
+	}
+	params.Viewer = v
+	if params.Overrides, err = platform.Overrides(ctx, e.k, e.cfg.Namespace); err != nil {
+		return params, nil, err
+	}
+	pl, err := platform.Render(params)
+	return params, pl, err
+}
+
+// legacyFlags fills in Traefik and Metrics Server for a plan saved before the
+// agent made the platform, from the files the cloud sent then.
+func legacyFlags(p *protocol.SetupPlan) {
+	if p.MetricsServer == nil && len(p.Files) > 0 {
+		m := p.Files["bootstrap/metrics-server.yaml"] != ""
+		p.MetricsServer = &m
+	}
+	if !p.Traefik && p.Files["bootstrap/traefik.yaml"] != "" {
+		p.Traefik = true
+	}
 }

@@ -1,0 +1,282 @@
+# What decides what Argo CD may deploy (spec §5.8). The agent applies these
+# objects from its own image; none of them is in git, so the repository the
+# cloud writes cannot widen them. Templates use double square brackets, so the
+# braces of the ApplicationSet pass through.
+
+# The ServiceAccount apps sync as, before the project apps names it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: [[ .Deployer ]]
+  namespace: [[ .ArgoCDNamespace ]]
+---
+# admin in every namespace, which Argo CD narrows to the destinations of the
+# project apps and the policy ladder-apps-namespaces to Ladder's namespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: [[ .Deployer ]]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin}
+subjects:
+  - {kind: ServiceAccount, name: [[ .Deployer ]], namespace: [[ .ArgoCDNamespace ]]}
+---
+# The namespaces of apps, which CreateNamespace=true makes and labels.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: [[ .Deployer ]]
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: [[ .Deployer ]]-namespaces
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: [[ .Deployer ]]}
+subjects:
+  - {kind: ServiceAccount, name: [[ .Deployer ]], namespace: [[ .ArgoCDNamespace ]]}
+---
+# The ServiceAccount the platform's charts sync as. With impersonation on,
+# every project names one; the platform installs CRDs, controllers and
+# their ClusterRoles, so it needs all rights.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: [[ .PlatformDeployer ]]
+  namespace: [[ .ArgoCDNamespace ]]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: [[ .PlatformDeployer ]]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin}
+subjects:
+  - {kind: ServiceAccount, name: [[ .PlatformDeployer ]], namespace: [[ .ArgoCDNamespace ]]}
+---
+# Argo CD makes the project default, which may deploy anything from anywhere.
+# Ladder locks it: its Applications are in the projects platform and apps.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: [[ .ArgoCDNamespace ]]
+spec:
+  description: Locked by Ladder. Ladder's Applications are in the projects platform and apps.
+  sourceRepos: []
+  sourceNamespaces: []
+  destinations: []
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - {group: "", kind: ""}
+---
+# Argo CD, Traefik, cert-manager and Metrics Server, from their Helm
+# repositories only.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: [[ .ArgoCDNamespace ]]
+spec:
+  description: Ladder's platform, which the agent applies from its own image
+  sourceRepos:
+[[- range .PlatformRepos ]]
+    - [[ . ]]
+[[- end ]]
+  destinations:
+    - {server: https://kubernetes.default.svc, namespace: [[ .ArgoCDNamespace ]]}
+    - {server: https://kubernetes.default.svc, namespace: traefik}
+    - {server: https://kubernetes.default.svc, namespace: cert-manager}
+    - {server: https://kubernetes.default.svc, namespace: kube-system}
+  clusterResourceWhitelist:
+    - {group: "*", kind: "*"}
+  destinationServiceAccounts:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+      defaultServiceAccount: "[[ .ArgoCDNamespace ]]:[[ .PlatformDeployer ]]"
+---
+# The apps from the repository, in namespaces Ladder made for them. Of
+# cluster-wide kinds only Namespace, which CreateNamespace=true in the
+# ApplicationSet needs. Argo CD applies them as ladder-apps-deployer, whose
+# rights end at those namespaces.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps
+  namespace: [[ .ArgoCDNamespace ]]
+spec:
+  description: Apps managed through Ladder
+  sourceRepos:
+    - [[ .RepoURL ]]
+  destinations:
+    - {server: https://kubernetes.default.svc, namespace: "![[ .ArgoCDNamespace ]]"}
+    - {server: https://kubernetes.default.svc, namespace: "![[ .AgentNamespace ]]"}
+    - {server: https://kubernetes.default.svc, namespace: "!kube-*"}
+    - {server: https://kubernetes.default.svc, namespace: "!traefik"}
+    - {server: https://kubernetes.default.svc, namespace: "!cert-manager"}
+    - {server: https://kubernetes.default.svc, namespace: "*"}
+  clusterResourceWhitelist:
+    - {group: "", kind: Namespace}
+  destinationServiceAccounts:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+      defaultServiceAccount: "[[ .ArgoCDNamespace ]]:[[ .Deployer ]]"
+---
+# One Application per folder apps/<name>/ with app.yaml (spec §6.4).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps
+  namespace: [[ .ArgoCDNamespace ]]
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: [[ .RepoURL ]]
+        revision: main
+        files:
+          - path: "apps/*/app.yaml"
+  template:
+    metadata:
+      name: "{{.name}}"
+      labels:
+        ladder.dev/managed: "true"
+    spec:
+      project: apps
+      sources:
+        - repoURL: [[ .RepoURL ]]
+          targetRevision: main
+          path: "charts/{{.chart}}"
+          helm:
+            releaseName: "{{.name}}"
+            valueFiles:
+              - "$values/{{.path.path}}/values.yaml"
+        - repoURL: [[ .RepoURL ]]
+          targetRevision: main
+          ref: values
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.namespace}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+        # Marks the namespace as one of apps: the policies below hold there.
+        managedNamespaceMetadata:
+          labels:
+            [[ .AppsLabel ]]: "true"
+---
+# In the namespaces of apps, pods meet the baseline Pod Security Standard,
+# whoever makes them: an app cannot reach its node, so neither can a commit.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ladder-apps-baseline
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        resources: [pods, replicationcontrollers, podtemplates]
+        operations: [CREATE, UPDATE]
+      - apiGroups: [apps]
+        apiVersions: ["*"]
+        resources: [deployments, replicasets, statefulsets, daemonsets]
+        operations: [CREATE, UPDATE]
+      - apiGroups: [batch]
+        apiVersions: ["*"]
+        resources: [jobs, cronjobs]
+        operations: [CREATE, UPDATE]
+  variables:
+    - name: spec
+      expression: >-
+        object.kind == 'Pod' ? object.spec :
+        object.kind == 'PodTemplate' ? object.template.spec :
+        object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec :
+        object.spec.template.spec
+    - name: containers
+      expression: >-
+        variables.spec.containers +
+        (has(variables.spec.initContainers) ? variables.spec.initContainers : []) +
+        (has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers : [])
+  validations:
+    - expression: >-
+        !(has(variables.spec.hostNetwork) && variables.spec.hostNetwork) &&
+        !(has(variables.spec.hostPID) && variables.spec.hostPID) &&
+        !(has(variables.spec.hostIPC) && variables.spec.hostIPC)
+      message: Apps from Ladder do not share the node's network, processes or IPC
+    - expression: "!has(variables.spec.volumes) || variables.spec.volumes.all(v, !has(v.hostPath))"
+      message: Apps from Ladder do not mount the node's files (hostPath)
+    - expression: >-
+        variables.containers.all(c, !has(c.securityContext) ||
+        !has(c.securityContext.privileged) || !c.securityContext.privileged)
+      message: Apps from Ladder do not run privileged containers
+    - expression: >-
+        variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) ||
+        !has(c.securityContext.capabilities.add) ||
+        c.securityContext.capabilities.add.all(a, a in ['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER',
+        'FSETID', 'KILL', 'MKNOD', 'NET_BIND_SERVICE', 'SETFCAP', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_CHROOT']))
+      message: Apps from Ladder add only the capabilities of the baseline Pod Security Standard
+    - expression: >-
+        variables.containers.all(c, !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))
+      message: Apps from Ladder do not take ports of the node (hostPort)
+    - expression: >-
+        variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.procMount) ||
+        c.securityContext.procMount == 'Default')
+      message: Apps from Ladder keep the default /proc mount
+    - expression: >-
+        !(has(variables.spec.securityContext) && has(variables.spec.securityContext.seccompProfile) &&
+        variables.spec.securityContext.seccompProfile.type == 'Unconfined') &&
+        variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.seccompProfile) ||
+        c.securityContext.seccompProfile.type != 'Unconfined')
+      message: Apps from Ladder keep a seccomp profile
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ladder-apps-baseline
+spec:
+  policyName: ladder-apps-baseline
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        [[ .AppsLabel ]]: "true"
+---
+# ladder-apps-deployer works only in namespaces Ladder made for apps, and
+# keeps their label: a commit cannot take another namespace, nor drop the
+# label to leave the policy above.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ladder-apps-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        resources: [namespaces]
+        operations: [CREATE, UPDATE]
+  matchConditions:
+    - name: deployed-by-ladder
+      expression: request.userInfo.username == 'system:serviceaccount:[[ .ArgoCDNamespace ]]:[[ .Deployer ]]'
+  validations:
+    - expression: >-
+        has(object.metadata.labels) && object.metadata.labels[?'[[ .AppsLabel ]]'].orValue('') == 'true' &&
+        (request.operation == 'CREATE' || has(oldObject.metadata.labels) &&
+        oldObject.metadata.labels[?'[[ .AppsLabel ]]'].orValue('') == 'true')
+      message: Apps from Ladder go only into namespaces Ladder made, labelled [[ .AppsLabel ]]=true, and keep the label
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ladder-apps-namespaces
+spec:
+  policyName: ladder-apps-namespaces
+  validationActions: [Deny]

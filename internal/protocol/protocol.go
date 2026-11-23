@@ -280,8 +280,16 @@ type SetupPlan struct {
 	RepoURL   string     `json:"repoURL,omitempty"`
 	WriteMode string     `json:"writeMode"`
 	ArgoCD    ArgoCDPlan `json:"argocd"`
-	// Files is the starter repository rendered by the backend, path → content.
-	// Required by setup.apply; setup.plan ignores it.
+	// Traefik has setup add Traefik and cert-manager, in a cluster Ladder
+	// created in a cloud whose clusters come without an ingress controller.
+	Traefik bool `json:"traefik,omitempty"`
+	// MetricsServer is set by the agent, whatever the cloud sends: whether
+	// setup adds Metrics Server, which it does for a cluster without a
+	// Metrics API.
+	MetricsServer *bool `json:"metricsServer,omitempty"`
+	// Files is the starter repository of clouds from before the agent made
+	// the platform. Ignored; kept in saved plans, where it tells an older
+	// setup's Traefik and Metrics Server.
 	Files map[string]string `json:"files,omitempty"`
 	// Credentials let Argo CD read the repository. Never stored in the state
 	// ConfigMap.
@@ -333,7 +341,25 @@ type SetupStatus struct {
 	Provider string       `json:"provider,omitempty"`
 	RepoURL  string       `json:"repoURL,omitempty"`
 	Steps    []StepStatus `json:"steps"`
+	// Platform is where the agent stands with the platform it applies from
+	// its image once setup is done, such as after an upgrade.
+	Platform *PlatformStatus `json:"platform,omitempty"`
 }
+
+// PlatformStatus is the platform the agent applied after setup.
+type PlatformStatus struct {
+	State string `json:"state"` // applying | applied | failed
+	// Hash identifies what the agent applies; it changes with the agent's
+	// version and with people's overrides.
+	Hash  string `json:"hash,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+const (
+	PlatformApplying = "applying"
+	PlatformApplied  = "applied"
+	PlatformFailed   = "failed"
+)
 
 type StepStatus struct {
 	ID      string `json:"id"`

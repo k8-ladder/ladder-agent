@@ -39,11 +39,11 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 | `setup.status` | none | `SetupStatus` |
 | `setup.retry` | none | `SetupStatus`; continues from the failed step |
 | `argocd.refresh` | none | `{}` once Argo CD is asked to read git; see [Refresh](#refresh) |
-| `argocd.credentials` | none | `{ username, password }` from Secret `argocd-initial-admin-secret` |
+| `argocd.credentials` | none | `{ username, password }` of Argo CD's read-only account `ladder`, from Secret `ladder/ladder-argocd-viewer`; `failed_precondition` before the agent has applied the platform. The admin password stays in the cluster |
 | `agent.upgrade` | `{ version }` | `AgentUpgrade` with `state: running`; see [Upgrade](#upgrade) |
 | `kube.read` | `KubeReadRequest` | `KubeReadResult`: `text` as kubectl prints it; see [Cluster reads](#cluster-reads) |
 | `app.events` | `{ app }` | `AppEvents`: the events of one app's objects; see [App events and logs](#app-events-and-logs) |
-| `app.secrets.create` | `{ app, namespace, name, values }` | `{}` after an immutable app env Secret exists; values never returned |
+| `app.secrets.create` | `{ app, namespace, name, values }` | `{}` after an immutable app env Secret exists; values never returned. A missing namespace is made with the label `ladder.dev/apps=true`; an existing one without it is `failed_precondition` |
 | `app.logs` | `AppLogsRequest` | `AppLogs`: the app's pods and their last lines; see [App events and logs](#app-events-and-logs) |
 
 `SetupPlan`:
@@ -56,7 +56,7 @@ The agent dials the backend; the backend never connects to the cluster. Types li
   "repoURL": "https://ladder.example.com/git/acme/prod.git",
   "writeMode": "commit",
   "argocd": { "namespace": "argocd", "exposure": "ingress" },
-  "files": { "ladder.yaml": "…", "bootstrap/root.yaml": "…", "platform/argocd/values.yaml": "…" },
+  "traefik": false,
   "credentials": { "username": "ladder-c-1f2e3d4c5b6a7980", "password": "…" }
 }
 ```
@@ -73,17 +73,42 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 - `credentials` are kept in Secret `ladder-setup-credentials`, never in the state ConfigMap.
   Step `repo-secret` counts as done only when Secret `repo-deploy` holds this plan's URL and
   credentials, so `apply` with a new token rewrites it.
-- Defaults: `writeMode: commit`, `argocd.exposure: ingress` (an Ingress on path `/argocd`, declared
-  in `platform/argocd/values.yaml`; `host` is optional), Argo CD version and chart version from the
-  agent's configuration.
-- Starter files are rendered by the backend. Call `setup.plan` first to learn `repoURL` and the Argo
-  CD versions. Required files: `ladder.yaml`, `bootstrap/root.yaml`, `platform/argocd/values.yaml`.
-- `metricsServerPresent` is true when APIService `v1beta1.metrics.k8s.io` already exists, even
-  when it is unhealthy. A false value lets the cloud add `bootstrap/metrics-server.yaml` and
-  `platform/metrics-server/values.yaml` to the starter repository; Argo CD installs the chart.
-  An omitted value comes from an older agent, so the cloud adds no Metrics Server. A refused
-  APIService read fails `setup.plan`, rather than risking a second provider.
-  When the Metrics Server Application is in `files`, the sync step waits for it to be healthy.
+- Defaults: `writeMode: commit`, `argocd.exposure: ingress` (an Ingress on path `/argocd`, which
+  the agent makes; `host` is ignored). Argo CD's version and chart version are always the agent's
+  own: values the cloud sends are replaced. `argocd.namespace` may not be the agent's namespace nor
+  `kube-*`.
+- **The platform is the agent's** (package `internal/platform`): Argo CD's Helm values, the
+  AppProjects `default` (locked: no sources, no destinations), `platform` and `apps`, the
+  Applications `argocd`, `traefik` and `cert-manager` (with `traefik: true`) and `metrics-server`, the
+  ApplicationSet `apps`, the ServiceAccounts `ladder-apps-deployer` (apps sync as it: `admin` in every
+  namespace, which the project and the policies narrow) and `ladder-platform-deployer`
+  (`cluster-admin`, for the platform's charts), and the ValidatingAdmissionPolicies
+  `ladder-apps-baseline` and `ladder-apps-namespaces`. They come from the agent's image with the
+  plan's checked fields, never from the repository; the backend commits only `ladder.yaml`, the
+  README, `apps/` and the standard charts. `files` from older clouds are ignored.
+- `traefik` adds Traefik and cert-manager, for a cluster Ladder created in a cloud whose clusters
+  come without an ingress controller. `metricsServer` is the agent's: `apply` reads APIService
+  `v1beta1.metrics.k8s.io` and adds Metrics Server only when it does not exist; a refused read
+  fails `apply` before anything changes. When Metrics Server is added, the sync step waits for it.
+- `metricsServerPresent` in the `setup.plan` result is true when that APIService already exists,
+  even when it is unhealthy. A refused read fails `setup.plan`.
+- Step `platform` applies all of it server-side, as field manager `ladder-agent`. On a cluster set
+  up from git before, it first deletes the Applications `root` and `appsets`, and those of the
+  platform that still take values from git, without their finalizers, so what they deployed keeps
+  running and the agent's Applications of the same names take it over; it labels the namespaces of
+  existing apps `ladder.dev/apps=true` and removes Argo CD's tracking annotation from objects that
+  were those Applications'. It makes Ingress `argocd-server` only when there is none, and starts a
+  sync of a platform Application whose last sync failed. `retry` runs `platform` again too.
+- Once setup is done, the agent applies the platform again on every start when its hash differs
+  from the one in ConfigMap `ladder-platform-state`: after an upgrade, or when people changed the
+  Helm values they override in ConfigMap `ladder-platform` (keys `argocd.yaml`, `traefik.yaml`,
+  `cert-manager.yaml`, `metrics-server.yaml`, merged over Ladder's). `SetupStatus.platform` says
+  where it stands: `state` `applying`, `applied` or `failed`, with `hash` and `error`. A failure
+  tries again after a minute, then with a growing pause.
+- With `traefik`, the agent watches Ingress `argocd-server` every 15 s after setup until it has a
+  host or a `tls` entry: once the ingress controller reports a public IPv4 address for it, the
+  agent sets the host `argocd.<address with dashes>.sslip.io` and a `tls` entry with Secret
+  `argocd-server-tls`. An Ingress people gave a host stays as it is.
 - The agent always installs its own Argo CD. The first step, `check-cluster`, fails when the
   cluster already runs an Argo CD that Ladder did not install (its namespace lacks the label
   `app.kubernetes.io/managed-by=ladder`).

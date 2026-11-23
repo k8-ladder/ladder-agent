@@ -14,6 +14,7 @@ import (
 	"github.com/ladder/ladder-agent/internal/config"
 	"github.com/ladder/ladder-agent/internal/helmx"
 	"github.com/ladder/ladder-agent/internal/kube"
+	"github.com/ladder/ladder-agent/internal/platform"
 	"github.com/ladder/ladder-agent/internal/protocol"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +38,8 @@ type Engine struct {
 	plan    *protocol.SetupPlan
 	status  protocol.SetupStatus
 	running bool
+	// platformStarted: StartPlatform runs once per agent.
+	platformStarted bool
 }
 
 func NewEngine(jobCtx context.Context, k *kube.Clients, h *helmx.Helm, in *cluster.Inspector, cfg config.Config, log *slog.Logger) *Engine {
@@ -55,6 +58,7 @@ func (e *Engine) Load(ctx context.Context) error {
 	if err != nil || plan == nil {
 		return err
 	}
+	legacyFlags(plan)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.plan, e.status = plan, *status
@@ -124,6 +128,14 @@ func (e *Engine) Apply(ctx context.Context, in protocol.SetupPlan) (protocol.Set
 	if err != nil {
 		return e.copyStatus(), err
 	}
+	// Metrics Server only where no provider owns the Metrics API, even an
+	// unhealthy one; a refused check stops setup before it changes anything.
+	_, err = e.k.Dynamic.Resource(kube.APIServiceGVR).Get(ctx, "v1beta1.metrics.k8s.io", metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return e.copyStatus(), err
+	}
+	metricsServer := apierrors.IsNotFound(err)
+	p.MetricsServer = &metricsServer
 	if err := e.k.EnsureNamespace(ctx, e.cfg.Namespace); err != nil {
 		return e.copyStatus(), err
 	}
@@ -154,8 +166,10 @@ func (e *Engine) Retry(ctx context.Context) (protocol.SetupStatus, error) {
 	if e.status.State != protocol.SetupFailed {
 		return e.copyStatus(), protocol.Errorf(protocol.CodeFailedPrecondition, "nothing to retry: setup is %s", e.status.State)
 	}
+	// The failed step runs again, and so does the platform: an agent
+	// upgraded since may bring another, which the steps after it wait for.
 	for i := range e.status.Steps {
-		if s := &e.status.Steps[i]; s.Status == protocol.StepFailed {
+		if s := &e.status.Steps[i]; s.Status == protocol.StepFailed || s.ID == stepPlatformID && s.Status == protocol.StepDone {
 			*s = protocol.StepStatus{ID: s.ID, Title: s.Title, Command: s.Command, Status: protocol.StepPending}
 		}
 	}
@@ -232,6 +246,83 @@ func (e *Engine) run(plan *protocol.SetupPlan) {
 	}
 	e.update(func(st *protocol.SetupStatus) { st.State = protocol.SetupDone })
 	e.log.Info("setup complete")
+	e.StartPlatform()
+}
+
+// StartPlatform keeps the platform of a finished setup as the agent's image
+// has it, once per agent: it applies it again when it changed, such as after
+// an upgrade or when people changed their overrides, and gives Argo CD its
+// host where Ladder added Traefik. It does nothing before setup is done.
+func (e *Engine) StartPlatform() {
+	e.mu.Lock()
+	if e.platformStarted || e.status.State != protocol.SetupDone || e.plan == nil {
+		e.mu.Unlock()
+		return
+	}
+	e.platformStarted = true
+	plan := *e.plan
+	e.mu.Unlock()
+	go func() {
+		e.reconcilePlatform(e.jobCtx, &plan)
+		if plan.Traefik && plan.ArgoCD.Exposure == "ingress" {
+			platform.WatchHost(e.jobCtx, e.k, plan.ArgoCD.Namespace, 15*time.Second, e.log.With("component", "argocd-host"))
+		}
+	}()
+}
+
+// reconcilePlatform applies the platform when what the agent last applied
+// differs, and tries again with a growing pause while it fails.
+func (e *Engine) reconcilePlatform(ctx context.Context, p *protocol.SetupPlan) {
+	pause := time.Minute
+	for {
+		err := e.applyPlatform(ctx, p)
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		e.log.Error("apply the platform", "err", err, "retry in", pause)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		pause = min(2*pause, 15*time.Minute)
+	}
+}
+
+func (e *Engine) applyPlatform(ctx context.Context, p *protocol.SetupPlan) error {
+	params, pl, err := e.render(ctx, p)
+	if err == nil {
+		var applied string
+		if applied, err = platform.AppliedHash(ctx, e.k, e.cfg.Namespace); err == nil && applied == pl.Hash {
+			e.setPlatform(protocol.PlatformStatus{State: protocol.PlatformApplied, Hash: pl.Hash})
+			return nil
+		}
+	}
+	if err == nil {
+		e.log.Info("applying the platform", "hash", pl.Hash)
+		e.setPlatform(protocol.PlatformStatus{State: protocol.PlatformApplying, Hash: pl.Hash})
+		err = platform.Apply(ctx, e.k, params, pl, e.log, time.Now())
+	}
+	if err != nil {
+		st := protocol.PlatformStatus{State: protocol.PlatformFailed, Error: err.Error()}
+		if pl != nil {
+			st.Hash = pl.Hash
+		}
+		e.setPlatform(st)
+		return err
+	}
+	e.log.Info("platform applied", "hash", pl.Hash)
+	e.setPlatform(protocol.PlatformStatus{State: protocol.PlatformApplied, Hash: pl.Hash})
+	return nil
+}
+
+func (e *Engine) setPlatform(st protocol.PlatformStatus) {
+	e.mu.Lock()
+	same := e.status.Platform != nil && *e.status.Platform == st
+	e.mu.Unlock()
+	if !same {
+		e.update(func(s *protocol.SetupStatus) { s.Platform = &st })
+	}
 }
 
 func (e *Engine) exec(ctx context.Context, s step) (result, detail string, err error) {

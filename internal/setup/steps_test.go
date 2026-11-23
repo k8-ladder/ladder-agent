@@ -25,13 +25,14 @@ func TestSyncWaitsForMetricsServer(t *testing.T) {
 			"status":   map[string]any{"sync": map[string]any{"status": "Synced"}, "health": map[string]any{"status": health}},
 		}}
 	}
-	dc := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), app("root", "Healthy"), app("argocd", "Healthy"), app("appsets", "Healthy"))
+	dc := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), app("argocd", "Healthy"))
 	e := &Engine{k: &kube.Clients{Dynamic: dc}}
-	p := &protocol.SetupPlan{ArgoCD: protocol.ArgoCDPlan{Namespace: "argocd"}, Files: map[string]string{}}
+	no, yes := false, true
+	p := &protocol.SetupPlan{ArgoCD: protocol.ArgoCDPlan{Namespace: "argocd"}, MetricsServer: &no}
 	if done, err := e.stepSync(p).done(t.Context()); err != nil || !done {
 		t.Fatalf("existing metrics provider: done=%v, err=%v", done, err)
 	}
-	p.Files["bootstrap/metrics-server.yaml"] = "kind: Application"
+	p.MetricsServer = &yes
 	if done, err := e.stepSync(p).done(t.Context()); err != nil || done {
 		t.Fatalf("missing metrics application: done=%v, err=%v", done, err)
 	}

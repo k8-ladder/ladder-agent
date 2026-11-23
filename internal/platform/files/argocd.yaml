@@ -1,0 +1,83 @@
+# Helm values for Argo CD (spec §5.6). The agent installs Argo CD with them,
+# then Argo CD manages itself with the same values through the Application
+# argocd, which the agent applies. They come from the agent's image, not from
+# git: the repository the cloud writes cannot change Argo CD. Override them in
+# ConfigMap ladder/ladder-platform, key argocd.yaml.
+configs:
+  cm:
+    # Apps sync as ServiceAccount ladder-apps-deployer, whose rights end at
+    # the namespaces of apps (AppProject apps, spec §5.8).
+    application.sync.impersonation.enabled: "true"
+    # The read-only account Ladder shows people. The admin password stays in
+    # the cluster (Secret argocd-initial-admin-secret).
+    accounts.ladder: login
+  rbac:
+    policy.csv: |
+      g, ladder, role:readonly
+  secret:
+    extra:
+      accounts.ladder.password: "[[ .Viewer.PasswordHash ]]"
+      accounts.ladder.passwordMtime: "[[ .Viewer.PasswordMtime ]]"
+  params:
+    # The ingress controller ends TLS, if any: Argo CD serves plain HTTP
+    # behind it.
+    server.insecure: true
+    # The UI and the API are served under /argocd.
+    server.rootpath: /argocd
+    server.basehref: /argocd
+    # Few apps from one repository need few workers: fewer Applications
+    # reconciled and synced at once, and at most two Helm renders at a time,
+    # each a process of its own that holds its memory while it runs.
+    controller.status.processors: 5
+    controller.operation.processors: 3
+    reposerver.parallelism.limit: 2
+dex:
+  enabled: false
+notifications:
+  enabled: false
+# Resources for a small cluster: about ten apps from one repository. The
+# requests are small, so the scheduler counts Argo CD without reserving much
+# of a small node; the memory limits keep one part that runs away from
+# starving the apps, and GOMEMLIMIT, about 90% of the limit, has Go collect
+# garbage before it. No CPU limits: Argo CD takes spare CPU when it syncs.
+# Raise these for more apps, or when kubectl -n argocd top pods comes close
+# to a limit.
+controller:
+  resources:
+    requests: {cpu: 50m, memory: 192Mi}
+    limits: {memory: 512Mi}
+  env:
+    - name: GOMEMLIMIT
+      value: 460MiB
+repoServer:
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {memory: 512Mi}
+  env:
+    # The rest of the limit is for the helm processes it runs.
+    - name: GOMEMLIMIT
+      value: 192MiB
+server:
+  resources:
+    requests: {cpu: 10m, memory: 48Mi}
+    limits: {memory: 192Mi}
+  env:
+    - name: GOMEMLIMIT
+      value: 172MiB
+applicationSet:
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  extraEnv:
+    - name: GOMEMLIMIT
+      value: 115MiB
+# Argo CD's cache: what it drops, Argo CD computes again.
+redis:
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 96Mi}
+  extraArgs:
+    - --maxmemory
+    - 64mb
+    - --maxmemory-policy
+    - allkeys-lru
