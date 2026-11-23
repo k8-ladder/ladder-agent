@@ -22,6 +22,7 @@ import (
 
 	"github.com/ladder/ladder-agent/internal/appsecrets"
 	"github.com/ladder/ladder-agent/internal/argo"
+	"github.com/ladder/ladder-agent/internal/audit"
 	"github.com/ladder/ladder-agent/internal/cluster"
 	"github.com/ladder/ladder-agent/internal/config"
 	"github.com/ladder/ladder-agent/internal/helmx"
@@ -116,6 +117,13 @@ func run() error {
 		return ""
 	}
 
+	// What the cloud asks that changes the cluster or reads more than the
+	// apps' status leaves a trace in the cluster (spec §12).
+	trail := &audit.Log{Kube: k.Kube, Namespace: cfg.Namespace, Pod: os.Getenv("POD_NAME"), Log: log.With("component", "audit")}
+	handle := func(method string, describe audit.Describe, h link.Handler) {
+		be.Handle(method, trail.Wrap(method, describe, h))
+	}
+
 	be.OnConnect(func() {
 		be.Emit(protocol.EventHello, hello)
 		be.Emit(protocol.EventSetupStatus, engine.Status())
@@ -140,14 +148,14 @@ func run() error {
 		}
 		return engine.Plan(ctx, p)
 	})
-	be.Handle(protocol.MethodSetupApply, func(ctx context.Context, raw json.RawMessage) (any, error) {
+	handle(protocol.MethodSetupApply, audit.Field("provider", "repoURL", "traefik"), func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var p protocol.SetupPlan
 		if err := decode(raw, &p); err != nil {
 			return nil, err
 		}
 		return engine.Apply(ctx, p)
 	})
-	be.Handle(protocol.MethodSetupRetry, func(ctx context.Context, _ json.RawMessage) (any, error) {
+	handle(protocol.MethodSetupRetry, nil, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return engine.Retry(ctx)
 	})
 	refresher := &argo.Refresher{K: k, Client: &http.Client{Timeout: 10 * time.Second}}
@@ -155,7 +163,7 @@ func run() error {
 		return struct{}{}, refresher.Refresh(ctx, argoNS, engine.RepoURL())
 	})
 	// Argo CD's read-only account; the admin password stays in the cluster.
-	be.Handle(protocol.MethodArgoCDCredentials, func(ctx context.Context, _ json.RawMessage) (any, error) {
+	handle(protocol.MethodArgoCDCredentials, func(json.RawMessage) string { return "account=" + platform.ViewerUser }, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		user, password, err := platform.ViewerCredentials(ctx, k, cfg.Namespace)
 		if errors.Is(err, platform.ErrNoViewer) {
 			return nil, protocol.Errorf(protocol.CodeFailedPrecondition, "%v: the agent makes it when it applies the platform", err)
@@ -167,14 +175,14 @@ func run() error {
 	})
 	reader := inspect.New(k)
 	reader.Off, reader.NoLogs, reader.Namespaces = !cfg.KubeRead, !cfg.AppLogs, cfg.ReadNamespaces
-	be.Handle(protocol.MethodAppSecretsCreate, func(ctx context.Context, raw json.RawMessage) (any, error) {
+	handle(protocol.MethodAppSecretsCreate, describeSecrets, func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.AppSecretsCreate
 		if json.Unmarshal(raw, &req) != nil {
 			return nil, protocol.Errorf(protocol.CodeBadRequest, "Invalid app secrets payload")
 		}
 		return struct{}{}, appsecrets.Create(ctx, k, req)
 	})
-	be.Handle(protocol.MethodKubeRead, func(ctx context.Context, raw json.RawMessage) (any, error) {
+	handle(protocol.MethodKubeRead, audit.Field("op", "kind", "namespace", "name", "container"), func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.KubeReadRequest
 		if err := decode(raw, &req); err != nil {
 			return nil, err
@@ -198,7 +206,7 @@ func run() error {
 		}
 		return watcher.Logs(ctx, req)
 	})
-	be.Handle(protocol.MethodAgentUpgrade, func(reqCtx context.Context, raw json.RawMessage) (any, error) {
+	handle(protocol.MethodAgentUpgrade, audit.Field("version"), func(reqCtx context.Context, raw json.RawMessage) (any, error) {
 		var req protocol.AgentUpgradeRequest
 		if err := decode(raw, &req); err != nil {
 			return nil, err
@@ -221,6 +229,16 @@ func run() error {
 	be.Run(ctx)
 	log.Info("shutting down")
 	return nil
+}
+
+// describeSecrets names an app env Secret version and how many keys it has,
+// never its values.
+func describeSecrets(payload json.RawMessage) string {
+	var req protocol.AppSecretsCreate
+	if json.Unmarshal(payload, &req) != nil {
+		return ""
+	}
+	return fmt.Sprintf("app=%s namespace=%s name=%s keys=%d", req.App, req.Namespace, req.Name, len(req.Values))
 }
 
 // signaturePolicy is what an image must carry before the agent runs it

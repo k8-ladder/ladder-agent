@@ -308,6 +308,16 @@ created, it exits, or it is not ready within 5 minutes. It then sets its own ima
 or updates turned off, `conflict` while setup or another
 upgrade runs. A new agent resumes an interrupted setup only once it is the Deployment's only pod.
 
+## Audit
+
+The agent records `setup.apply`, `setup.retry`, `agent.upgrade`, `app.secrets.create`,
+`argocd.credentials` and `kube.read` in the cluster, after serving or refusing them: an Event in its
+namespace about Deployment `ladder-agent` (reason `CloudRequest`, or `CloudRequestRefused` of type
+`Warning`), and a line in ConfigMap `ladder-audit` (key `log`, the last 500 lines):
+`2026-11-23T12:00:00Z agent.upgrade version=20261123120000: served`. Arguments are named without
+values: `app.secrets.create` gives the app, namespace, name and number of keys; `setup.apply` the
+provider, repository URL and `traefik`. Recording is best effort and never fails a request.
+
 ## Refresh
 
 The cloud's Gitea posts every push to `main` to the cloud, which sends `argocd.refresh` to the
