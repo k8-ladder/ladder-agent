@@ -13,6 +13,15 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 - The agent pings every 20 s and reconnects with backoff from 1 s to 30 s, plus jitter
   of up to 50%. Failed or timed-out attempts return to that loop without restarting the pod.
 - Frames can be up to 16 MiB, because `setup.apply` carries the starter repository.
+- The agent's first event is `agent.hello`. The backend counts the connection from it: until then
+  the connection neither replaces the cluster's current one nor gets requests, and events sent
+  before it are applied after it. A connection with no `agent.hello` among its first 17 messages
+  or within 15 s is closed with status 1008 (policy violation).
+- The first `agent.hello` of a cluster binds it to the `clusterID` it reports, the UID of
+  `kube-system`. A later connection whose `agent.hello` reports another one is closed with status
+  1008 and the reason `this token belongs to another Kubernetes cluster`; the cluster's connection
+  stays. An empty `clusterID` binds nothing and is taken. As after any 1008, the agent waits 30 s
+  before it reconnects.
 
 ## Envelope
 
