@@ -2,3 +2,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: ladder
+  labels:
+    # The agent upgrades its own Deployment: what runs here meets the
+    # restricted Pod Security Standard, as the agent does.
+    pod-security.kubernetes.io/enforce: restricted

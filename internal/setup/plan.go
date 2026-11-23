@@ -3,10 +3,10 @@ package setup
 import (
 	"context"
 	"fmt"
-	"time"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/ladder/ladder-agent/internal/platform"
 	"github.com/ladder/ladder-agent/internal/protocol"
@@ -16,7 +16,6 @@ var (
 	repoNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 	dnsLabelRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 )
-
 
 func badRequest(format string, args ...any) error {
 	return protocol.Errorf(protocol.CodeBadRequest, format, args...)

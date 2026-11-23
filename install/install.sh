@@ -48,7 +48,7 @@ fi
 
 show "kubectl auth can-i '*' '*' --all-namespaces"
 [ "$(kubectl auth can-i '*' '*' --all-namespaces 2>/dev/null)" = yes ] ||
-	fail "you need cluster-admin on $context: the agent gets cluster-admin, and only a cluster admin can grant it"
+	fail "you need cluster-admin on $context: the agent gets it for setup, and only a cluster admin can grant it"
 
 code="${LADDER_CODE:-}"
 [ -n "$code" ] || ask code "Connect code from $LADDER_URL: "
@@ -74,14 +74,6 @@ url=$(printf '%s' "$body" | json_field url)
 [ -n "$token" ] && [ -n "$url" ] || fail "unexpected answer from $LADDER_URL"
 if printf '%s' "$body" | grep -q '"reconnected": *true'; then
 	say "Ladder already knows this cluster as $(printf '%s' "$body" | json_field clusterName): its agent gets a new token."
-fi
-
-# An older install may have bound ladder-agent to another role, and a
-# binding's roleRef cannot change: replace it.
-role=$(kubectl get clusterrolebinding ladder-agent -o jsonpath='{.roleRef.name}' 2>/dev/null || true)
-if [ -n "$role" ] && [ "$role" != cluster-admin ]; then
-	show "kubectl delete clusterrolebinding ladder-agent  # bound to $role by an older install"
-	kubectl delete clusterrolebinding ladder-agent
 fi
 
 show "curl -fsSL $LADDER_URL/install/agent.yaml | kubectl apply -f -"

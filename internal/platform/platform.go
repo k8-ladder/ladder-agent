@@ -36,6 +36,12 @@ const (
 	// PlatformDeployer is the ServiceAccount, in Argo CD's namespace, that
 	// Argo CD syncs the platform's charts as.
 	PlatformDeployer = "ladder-platform-deployer"
+	// Agent is the agent's ServiceAccount, ClusterRole and bindings.
+	Agent = "ladder-agent"
+	// SetupBinding gives the agent cluster-admin for setup and for applying
+	// another platform. The install script makes it; the agent deletes it
+	// once it has applied the platform of a finished setup.
+	SetupBinding = "ladder-agent-setup"
 	// AppsLabel marks the namespaces of apps. Ladder's policies hold there.
 	AppsLabel = "ladder.dev/apps"
 	// Ingress is Argo CD's Ingress.
@@ -128,9 +134,9 @@ func Render(p Params) (*Platform, error) {
 	}
 	data := struct {
 		Params
-		PlatformRepos                         []string
-		Deployer, PlatformDeployer, AppsLabel string
-	}{p, repos(p), Deployer, PlatformDeployer, AppsLabel}
+		PlatformRepos                                                    []string
+		Deployer, PlatformDeployer, AppsLabel, Agent, TLSSecret, Ingress string
+	}{p, repos(p), Deployer, PlatformDeployer, AppsLabel, Agent, TLSSecret, Ingress}
 
 	out := &Platform{}
 	for _, c := range Components(p) {
@@ -143,12 +149,17 @@ func Render(p Params) (*Platform, error) {
 		}
 		out.Objects = append(out.Objects, application(p, c, values))
 	}
+	agent, err := renderObjects("agent.yaml", data)
+	if err != nil {
+		return nil, err
+	}
 	objs, err := renderObjects("objects.yaml", data)
 	if err != nil {
 		return nil, err
 	}
-	// The projects and the deployer before the Applications that use them.
-	out.Objects = append(objs, out.Objects...)
+	// The agent's own rights first, then the projects and the deployers
+	// before the Applications that use them.
+	out.Objects = append(append(agent, objs...), out.Objects...)
 	if p.Exposure == "ingress" {
 		ing, err := renderObjects("ingress.yaml", data)
 		if err != nil {
@@ -285,4 +296,10 @@ func renderObjects(file string, data any) ([]*unstructured.Unstructured, error) 
 		out = append(out, &unstructured.Unstructured{Object: obj})
 	}
 	return out, nil
+}
+
+// GrantCommand gives the agent back the access it needs to set up or to
+// apply another platform.
+func GrantCommand(agentNamespace string) string {
+	return "kubectl create clusterrolebinding " + SetupBinding + " --clusterrole=cluster-admin --serviceaccount=" + agentNamespace + ":" + Agent
 }

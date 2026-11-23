@@ -18,10 +18,10 @@ import (
 
 func ladderPlan() protocol.SetupPlan {
 	return protocol.SetupPlan{
-		Provider: protocol.ProviderLadder,
-		Owner:    "acme",
-		Repo:     "prod",
-		RepoURL:  "https://ladder.example.com/git/acme/prod.git",
+		Provider:    protocol.ProviderLadder,
+		Owner:       "acme",
+		Repo:        "prod",
+		RepoURL:     "https://ladder.example.com/git/acme/prod.git",
 		Credentials: &protocol.RepoCredentials{Username: "ladder-c-1", Password: "token-1"},
 	}
 }

@@ -348,17 +348,22 @@ type SetupStatus struct {
 
 // PlatformStatus is the platform the agent applied after setup.
 type PlatformStatus struct {
-	State string `json:"state"` // applying | applied | failed
+	State string `json:"state"` // applying | applied | failed | needs_access
 	// Hash identifies what the agent applies; it changes with the agent's
 	// version and with people's overrides.
 	Hash  string `json:"hash,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Command gives the agent the access it waits for, with needs_access.
+	Command string `json:"command,omitempty"`
 }
 
 const (
 	PlatformApplying = "applying"
 	PlatformApplied  = "applied"
 	PlatformFailed   = "failed"
+	// PlatformNeedsAccess: the platform changed, and the agent waits for
+	// setup access to apply it; Error holds the command that gives it.
+	PlatformNeedsAccess = "needs_access"
 )
 
 type StepStatus struct {

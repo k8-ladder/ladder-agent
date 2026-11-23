@@ -3,11 +3,19 @@
 #
 # To remove the agent; Argo CD and the apps keep running:
 #   kubectl delete namespace ladder
-#   kubectl delete clusterrolebinding ladder-agent
+#   kubectl delete clusterrolebinding ladder-agent ladder-agent-view ladder-agent-setup
+#   kubectl delete clusterrole ladder-agent
+#   kubectl delete validatingadmissionpolicy,validatingadmissionpolicybinding ladder-agent-secrets ladder-agent-refresh
+#   kubectl -n argocd delete role,rolebinding ladder-agent
+#
+# The agent upgrades its own Deployment: what runs in its namespace meets the
+# restricted Pod Security Standard, as the agent does.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ladder
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -15,12 +23,14 @@ metadata:
   name: ladder-agent
   namespace: ladder
 ---
-# The agent keeps cluster-admin for its whole life (spec §5.8). The cloud can
-# use it only through the fixed methods of the agent protocol.
+# cluster-admin for setup only (spec §5.8): once setup is done, the agent
+# gives itself the narrow ClusterRole ladder-agent and deletes this binding.
+# Applying another platform later needs it back. The cloud can use the agent
+# only through the fixed methods of the agent protocol.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ladder-agent
+  name: ladder-agent-setup
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

@@ -14,6 +14,7 @@ import (
 	"github.com/ladder/ladder-agent/internal/kube"
 	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -132,6 +133,9 @@ func Apply(ctx context.Context, k *kube.Clients, p Params, pl *Platform, log *sl
 	if err := labelAppNamespaces(ctx, k, apps, p, log); err != nil {
 		return fmt.Errorf("label the namespaces of apps: %w", err)
 	}
+	if err := replaceAgentBinding(ctx, k, p.AgentNamespace, log); err != nil {
+		return fmt.Errorf("the agent's ClusterRoleBinding: %w", err)
+	}
 	for _, obj := range pl.Objects {
 		applied, err := k.Apply(ctx, obj.DeepCopy())
 		if err != nil {
@@ -218,6 +222,63 @@ func resync(ctx context.Context, apps dynamic.ResourceInterface, name string, lo
 	log.Info("syncing an Application of the platform again", "application", name, "last", phase)
 	_, err = apps.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: kube.FieldManager})
 	return err
+}
+
+// replaceAgentBinding deletes ClusterRoleBinding ladder-agent of an older
+// install, which bound the agent to cluster-admin for good, so that the
+// platform makes it again with the agent's own ClusterRole: a binding's
+// roleRef cannot change. The agent keeps cluster-admin meanwhile through
+// ladder-agent-setup, which it drops once the platform is applied.
+func replaceAgentBinding(ctx context.Context, k *kube.Clients, agentNamespace string, log *slog.Logger) error {
+	crbs := k.Kube.RbacV1().ClusterRoleBindings()
+	b, err := crbs.Get(ctx, Agent, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if b.RoleRef.Kind == "ClusterRole" && b.RoleRef.Name == Agent {
+		return nil
+	}
+	_, err = crbs.Create(ctx, &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: SetupBinding, Labels: map[string]string{"app.kubernetes.io/managed-by": "ladder"}},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: Agent, Namespace: agentNamespace}},
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	log.Info("replacing the ClusterRoleBinding of an older install", "binding", Agent, "role", b.RoleRef.Name)
+	if err := crbs.Delete(ctx, Agent, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// DropSetupAccess deletes ClusterRoleBinding ladder-agent-setup once the
+// agent's own ClusterRoleBinding is in place, and reports whether it did.
+func DropSetupAccess(ctx context.Context, k *kube.Clients, log *slog.Logger) (bool, error) {
+	crbs := k.Kube.RbacV1().ClusterRoleBindings()
+	b, err := crbs.Get(ctx, Agent, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if b.RoleRef.Kind != "ClusterRole" || b.RoleRef.Name != Agent {
+		return false, nil
+	}
+	err = crbs.Delete(ctx, SetupBinding, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	log.Info("setup access dropped: the agent keeps its own rights", "binding", SetupBinding)
+	return true, nil
 }
 
 // orphan deletes an Application without what it deployed.

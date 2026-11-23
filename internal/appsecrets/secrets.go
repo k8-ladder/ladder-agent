@@ -75,6 +75,12 @@ func Create(ctx context.Context, k *kube.Clients, req protocol.AppSecretsCreate)
 	if apierrors.IsAlreadyExists(err) {
 		// Retrying a failed Git write is safe, but a version never changes.
 		cur, readErr := secrets.Get(ctx, req.Name, metav1.GetOptions{})
+		if apierrors.IsForbidden(readErr) {
+			// The agent writes Secrets it may not read back. The name is
+			// a random version per change: one that exists is this change's,
+			// sent again after a lost answer.
+			return nil
+		}
 		if readErr != nil {
 			return protocol.Errorf(protocol.CodeInternal, "Could not check the secret version")
 		}

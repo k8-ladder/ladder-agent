@@ -143,8 +143,9 @@ func run() error {
 	be.Handle(protocol.MethodSetupRetry, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return engine.Retry(ctx)
 	})
+	refresher := &argo.Refresher{K: k, Client: &http.Client{Timeout: 10 * time.Second}}
 	be.Handle(protocol.MethodArgoCDRefresh, func(ctx context.Context, _ json.RawMessage) (any, error) {
-		return struct{}{}, argo.Refresh(ctx, k, argoNS)
+		return struct{}{}, refresher.Refresh(ctx, argoNS, engine.RepoURL())
 	})
 	// Argo CD's read-only account; the admin password stays in the cluster.
 	be.Handle(protocol.MethodArgoCDCredentials, func(ctx context.Context, _ json.RawMessage) (any, error) {

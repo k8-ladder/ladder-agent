@@ -76,6 +76,16 @@ func (e *Engine) Resume() {
 	}
 }
 
+// RepoURL is the repository setup set up, if any.
+func (e *Engine) RepoURL() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.plan == nil {
+		return ""
+	}
+	return e.plan.RepoURL
+}
+
 // ArgoCDNamespace is the namespace chosen by setup, if any.
 func (e *Engine) ArgoCDNamespace() string {
 	e.mu.Lock()
@@ -128,6 +138,9 @@ func (e *Engine) Apply(ctx context.Context, in protocol.SetupPlan) (protocol.Set
 	if err != nil {
 		return e.copyStatus(), err
 	}
+	if err := e.needAccess(ctx, "Setup"); err != nil {
+		return e.copyStatus(), err
+	}
 	// Metrics Server only where no provider owns the Metrics API, even an
 	// unhealthy one; a refused check stops setup before it changes anything.
 	_, err = e.k.Dynamic.Resource(kube.APIServiceGVR).Get(ctx, "v1beta1.metrics.k8s.io", metav1.GetOptions{})
@@ -165,6 +178,9 @@ func (e *Engine) Retry(ctx context.Context) (protocol.SetupStatus, error) {
 	}
 	if e.status.State != protocol.SetupFailed {
 		return e.copyStatus(), protocol.Errorf(protocol.CodeFailedPrecondition, "nothing to retry: setup is %s", e.status.State)
+	}
+	if err := e.needAccess(ctx, "Setup"); err != nil {
+		return e.copyStatus(), err
 	}
 	// The failed step runs again, and so does the platform: an agent
 	// upgraded since may bring another, which the steps after it wait for.
@@ -263,30 +279,66 @@ func (e *Engine) StartPlatform() {
 	plan := *e.plan
 	e.mu.Unlock()
 	go func() {
-		e.reconcilePlatform(e.jobCtx, &plan)
+		if e.reconcilePlatform(e.jobCtx, &plan) {
+			if _, err := platform.DropSetupAccess(e.jobCtx, e.k, e.log); err != nil && e.jobCtx.Err() == nil {
+				e.log.Error("drop setup access", "err", err)
+			}
+		}
 		if plan.Traefik && plan.ArgoCD.Exposure == "ingress" {
 			platform.WatchHost(e.jobCtx, e.k, plan.ArgoCD.Namespace, 15*time.Second, e.log.With("component", "argocd-host"))
 		}
 	}()
 }
 
+// errNeedsAccess: the platform changed, and the agent has no setup access
+// to apply it.
+var errNeedsAccess = errors.New("the agent needs setup access to apply its platform")
+
+// accessPoll is how often the agent looks for setup access while it waits.
+var accessPoll = 15 * time.Second
+
 // reconcilePlatform applies the platform when what the agent last applied
-// differs, and tries again with a growing pause while it fails.
-func (e *Engine) reconcilePlatform(ctx context.Context, p *protocol.SetupPlan) {
+// differs, and tries again with a growing pause while it fails. It waits for
+// setup access when it has none, and reports whether the platform is applied.
+func (e *Engine) reconcilePlatform(ctx context.Context, p *protocol.SetupPlan) bool {
 	pause := time.Minute
 	for {
 		err := e.applyPlatform(ctx, p)
-		if err == nil || ctx.Err() != nil {
-			return
+		if err == nil {
+			return true
 		}
-		e.log.Error("apply the platform", "err", err, "retry in", pause)
+		if ctx.Err() != nil {
+			return false
+		}
+		wait := pause
+		if errors.Is(err, errNeedsAccess) {
+			wait = accessPoll
+		} else {
+			e.log.Error("apply the platform", "err", err, "retry in", pause)
+			pause = min(2*pause, 15*time.Minute)
+		}
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(pause):
+			return false
+		case <-time.After(wait):
 		}
-		pause = min(2*pause, 15*time.Minute)
 	}
+}
+
+// needAccess answers a request that needs setup access when the agent has
+// none, with the command that gives it.
+func (e *Engine) needAccess(ctx context.Context, what string) error {
+	if e.inspector == nil {
+		return nil
+	}
+	ok, err := e.inspector.SetupAccess(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return protocol.Errorf(protocol.CodeFailedPrecondition, "%s needs the agent to have cluster-admin for a while: %s", what, platform.GrantCommand(e.cfg.Namespace))
+	}
+	return nil
 }
 
 func (e *Engine) applyPlatform(ctx context.Context, p *protocol.SetupPlan) error {
@@ -296,6 +348,15 @@ func (e *Engine) applyPlatform(ctx context.Context, p *protocol.SetupPlan) error
 		if applied, err = platform.AppliedHash(ctx, e.k, e.cfg.Namespace); err == nil && applied == pl.Hash {
 			e.setPlatform(protocol.PlatformStatus{State: protocol.PlatformApplied, Hash: pl.Hash})
 			return nil
+		}
+	}
+	if err == nil {
+		var ok bool
+		if ok, err = e.inspector.SetupAccess(ctx); err == nil && !ok {
+			e.setPlatform(protocol.PlatformStatus{State: protocol.PlatformNeedsAccess, Hash: pl.Hash,
+				Error:   "The agent needs cluster-admin for a while to apply its platform, which changed with its version or the overrides",
+				Command: platform.GrantCommand(e.cfg.Namespace)})
+			return errNeedsAccess
 		}
 	}
 	if err == nil {

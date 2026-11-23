@@ -92,7 +92,11 @@ The agent dials the backend; the backend never connects to the cluster. Types li
   ApplicationSet `apps`, the ServiceAccounts `ladder-apps-deployer` (apps sync as it: `admin` in every
   namespace, which the project and the policies narrow) and `ladder-platform-deployer`
   (`cluster-admin`, for the platform's charts), and the ValidatingAdmissionPolicies
-  `ladder-apps-baseline` and `ladder-apps-namespaces`. They come from the agent's image with the
+  `ladder-apps-baseline` and `ladder-apps-namespaces`; and the agent's own rights once setup is
+  done: ClusterRole `ladder-agent` with its binding, the binding `ladder-agent-view` to `view`,
+  Roles `ladder-agent` in its namespace and Argo CD's, the policies `ladder-agent-secrets` and
+  `ladder-agent-refresh`, and the label `pod-security.kubernetes.io/enforce: restricted` on its
+  namespace (spec §5.8). They come from the agent's image with the
   plan's checked fields, never from the repository; the backend commits only `ladder.yaml`, the
   README, `apps/` and the standard charts. `files` from older clouds are ignored.
 - `traefik` adds Traefik and cert-manager, for a cluster Ladder created in a cloud whose clusters
@@ -112,8 +116,12 @@ The agent dials the backend; the backend never connects to the cluster. Types li
   from the one in ConfigMap `ladder-platform-state`: after an upgrade, or when people changed the
   Helm values they override in ConfigMap `ladder-platform` (keys `argocd.yaml`, `traefik.yaml`,
   `cert-manager.yaml`, `metrics-server.yaml`, merged over Ladder's). `SetupStatus.platform` says
-  where it stands: `state` `applying`, `applied` or `failed`, with `hash` and `error`. A failure
-  tries again after a minute, then with a growing pause.
+  where it stands: `state` `applying`, `applied`, `failed` or `needs_access`, with `hash` and
+  `error`. A failure tries again after a minute, then with a growing pause. With another platform
+  to apply and no setup access (ClusterRoleBinding `ladder-agent-setup`, which the agent deletes
+  once the platform of a finished setup is applied), the state is `needs_access`, `command` holds
+  `kubectl create clusterrolebinding ladder-agent-setup --clusterrole=cluster-admin --serviceaccount=ladder:ladder-agent`,
+  and the agent looks for the access every 15 s.
 - With `traefik`, the agent watches Ingress `argocd-server` every 15 s after setup until it has a
   host or a `tls` entry: once the ingress controller reports a public IPv4 address for it, the
   agent sets the host `argocd.<address with dashes>.sslip.io` and a `tls` entry with Secret
@@ -121,7 +129,8 @@ The agent dials the backend; the backend never connects to the cluster. Types li
 - The agent always installs its own Argo CD. The first step, `check-cluster`, fails when the
   cluster already runs an Argo CD that Ladder did not install (its namespace lacks the label
   `app.kubernetes.io/managed-by=ladder`).
-- `apply` returns `conflict` while setup is running and `failed_precondition` once it is done.
+- `apply` returns `conflict` while setup is running and `failed_precondition` once it is done, or
+  when the agent has no setup access, with the command that gives it; so does `retry`.
   After a failure, either `retry` or `apply` again with a corrected plan. Steps that are already done
   are skipped.
 - A step that fails because the cluster's API did not answer (dropped connection, timeout, `429`,
@@ -289,8 +298,19 @@ upgrade runs. A new agent resumes an interrupted setup only once it is the Deplo
 ## Refresh
 
 The cloud's Gitea posts every push to `main` to the cloud, which sends `argocd.refresh` to the
-cluster's agent. The agent annotates every ApplicationSet with
-`argocd.argoproj.io/application-set-refresh` and every Application with
-`argocd.argoproj.io/refresh`, so Argo CD reads git at once instead of at its next poll, about 3
-minutes later. An agent that does not know the method answers `unknown_method`, and Argo CD reads
+cluster's agent, so Argo CD reads git at once instead of at its next poll, about 3 minutes later:
+
+- **Applications.** The agent posts the push to Argo CD's webhook,
+  `http://argocd-server.<namespace>.svc/argocd/api/webhook`, as a git server would: header
+  `X-Gogs-Event: push` (Gitea's format; Argo CD does not know `X-Gitea-Event`), body
+  `{"ref": "refs/heads/main", "repository": {"html_url": "<repoURL without .git>", "clone_url": "<repoURL>"}}`,
+  with `ssh://git@host/path.git` named `https://host/path`. Argo CD refreshes the Applications of
+  that repository, so the agent needs no right on them. If the webhook fails, the agent annotates
+  every Application with `argocd.argoproj.io/refresh`, which only an agent with setup access may.
+- **ApplicationSets.** Argo CD's own webhook for them does not start reliably (it fails when the
+  ApplicationSet controller starts before the server has made its secret key), so the agent
+  annotates every ApplicationSet with `argocd.argoproj.io/application-set-refresh`, and a new app
+  gets its Application at once. Without setup access, the policy `ladder-agent-refresh` lets it
+  change nothing else of theirs.
+ An agent that does not know the method answers `unknown_method`, and Argo CD reads
 the push at its next poll.

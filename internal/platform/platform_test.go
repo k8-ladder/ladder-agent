@@ -55,6 +55,10 @@ func TestRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
+		"Namespace/ladder", "ClusterRole/ladder-agent", "ClusterRoleBinding/ladder-agent", "ClusterRoleBinding/ladder-agent-view",
+		"Role/ladder-agent", "RoleBinding/ladder-agent", "Role/ladder-agent", "RoleBinding/ladder-agent",
+		"ValidatingAdmissionPolicy/ladder-agent-secrets", "ValidatingAdmissionPolicyBinding/ladder-agent-secrets",
+		"ValidatingAdmissionPolicy/ladder-agent-refresh", "ValidatingAdmissionPolicyBinding/ladder-agent-refresh",
 		"ServiceAccount/ladder-apps-deployer", "ClusterRoleBinding/ladder-apps-deployer", "ClusterRole/ladder-apps-deployer",
 		"ClusterRoleBinding/ladder-apps-deployer-namespaces", "ServiceAccount/ladder-platform-deployer",
 		"ClusterRoleBinding/ladder-platform-deployer", "AppProject/default", "AppProject/platform", "AppProject/apps",
@@ -337,5 +341,53 @@ func TestResync(t *testing.T) {
 	got, _ = apps.Get(ctx, "traefik", metav1.GetOptions{})
 	if _, ok := got.Object["operation"]; ok {
 		t.Error("a synced Application syncs again")
+	}
+}
+
+// Once setup is done, the agent reads without Secrets and without exec,
+// attach, port-forward or the kubelet, and writes only what its methods need.
+func TestAgentRights(t *testing.T) {
+	pl, err := Render(params())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := find(t, pl, "Namespace", "ladder")
+	if ns.GetLabels()["pod-security.kubernetes.io/enforce"] != "restricted" {
+		t.Errorf("agent namespace labels = %v", ns.GetLabels())
+	}
+	role := find(t, pl, "ClusterRole", Agent)
+	rules, _, _ := unstructured.NestedSlice(role.Object, "rules")
+	for _, r := range rules {
+		m := r.(map[string]any)
+		res, _, _ := unstructured.NestedStringSlice(m, "resources")
+		verbs, _, _ := unstructured.NestedStringSlice(m, "verbs")
+		for _, name := range res {
+			if name == "*" || strings.Contains(name, "/") {
+				t.Errorf("ClusterRole grants %s", name)
+			}
+			if name == "secrets" && !slices.Equal(verbs, []string{"create"}) {
+				t.Errorf("ClusterRole secrets verbs = %v", verbs)
+			}
+		}
+		for _, v := range verbs {
+			if v == "*" || v == "delete" || v == "patch" || v == "update" || v == "escalate" || v == "bind" || v == "impersonate" {
+				t.Errorf("ClusterRole grants %s on %v", v, res)
+			}
+		}
+	}
+	view := find(t, pl, "ClusterRoleBinding", Agent+"-view")
+	if name, _, _ := unstructured.NestedString(view.Object, "roleRef", "name"); name != "view" {
+		t.Errorf("view binding roleRef = %q", name)
+	}
+	for _, name := range []string{Agent + "-secrets", Agent + "-refresh"} {
+		vap := find(t, pl, "ValidatingAdmissionPolicy", name)
+		conds, _, _ := unstructured.NestedSlice(vap.Object, "spec", "matchConditions")
+		if len(conds) != 2 || !strings.Contains(conds[0].(map[string]any)["expression"].(string), "system:serviceaccount:ladder:ladder-agent") ||
+			!strings.Contains(conds[1].(map[string]any)["expression"].(string), "authorizer") {
+			t.Errorf("%s matchConditions = %v", name, conds)
+		}
+	}
+	if !strings.Contains(GrantCommand("ladder"), "--serviceaccount=ladder:ladder-agent") {
+		t.Errorf("grant command = %q", GrantCommand("ladder"))
 	}
 }
