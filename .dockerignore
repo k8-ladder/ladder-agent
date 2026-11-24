@@ -3,3 +3,4 @@ deploy/
 hack/
 *.md
 .github/
+.git/
