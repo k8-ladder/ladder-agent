@@ -127,3 +127,7 @@ watcher and setup work as in the cluster.
   an agent restart to watch it.
 - Unit tests cover the sync check of setup, the platform's rendering and move from git, the watcher,
   cluster reads, logs and the upgrade. Applying the platform needs a real cluster (k3d).
+
+## License
+
+Apache License 2.0, in [`LICENSE`](LICENSE).

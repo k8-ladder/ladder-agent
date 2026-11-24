@@ -75,6 +75,7 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
           cache-from: type=gha,scope=agent
           cache-to: type=gha,mode=max,scope=agent
       # A Sigstore bundle of the image index's digest, an OCI referrer next to
