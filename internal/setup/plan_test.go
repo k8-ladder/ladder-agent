@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ladder/ladder-agent/internal/config"
-	"github.com/ladder/ladder-agent/internal/kube"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/internal/config"
+	"github.com/k8-ladder/ladder-agent/internal/kube"
+	"github.com/k8-ladder/ladder-agent/protocol"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

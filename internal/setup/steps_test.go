@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ladder/ladder-agent/internal/kube"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/internal/kube"
+	"github.com/k8-ladder/ladder-agent/protocol"
 	appsv1 "k8s.io/api/apps/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

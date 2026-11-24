@@ -3,7 +3,7 @@ package argo
 import (
 	"testing"
 
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/protocol"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

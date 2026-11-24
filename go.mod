@@ -1,4 +1,4 @@
-module github.com/ladder/ladder-agent
+module github.com/k8-ladder/ladder-agent
 
 go 1.27.1
 

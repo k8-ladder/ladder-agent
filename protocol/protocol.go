@@ -1,6 +1,6 @@
-// Package protocol mirrors the wire contract between ladder-agent and
-// ladder-be. ladder-agent/PROTOCOL.md is the contract; the agent's
-// internal/protocol package holds the same types. Keep the two in sync.
+// Package protocol holds the types of the wire contract between the agent and
+// the Ladder cloud, which PROTOCOL.md describes. The cloud imports this
+// package, so both ends build from the same types.
 package protocol
 
 import (

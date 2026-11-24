@@ -1,7 +1,8 @@
 # Agent ↔ backend protocol
 
 The agent dials the backend; the backend never connects to the cluster. Types live in
-[internal/protocol/protocol.go](internal/protocol/protocol.go), which is the source of truth.
+[protocol/protocol.go](protocol/protocol.go), which is the source of truth. The cloud imports that
+package.
 
 ## Connection
 
@@ -290,7 +291,7 @@ cannot pick another image. Unless its policy is off, the agent resolves the tag 
 the Sigstore bundles that refer to it (OCI referrers of artifact type
 `application/vnd.dev.sigstore.bundle.v0.3+json`), and needs one that verifies against Sigstore's
 trusted root (TUF): a Fulcio certificate of `LADDER_AGENT_SIGNER` (default the workflow
-`agent.yml` of `k8-ladder/ladder` on `main`) from `LADDER_AGENT_SIGNER_ISSUER` (default GitHub
+`release.yml` of `k8-ladder/ladder-agent` on `main`) from `LADDER_AGENT_SIGNER_ISSUER` (default GitHub
 Actions), a certificate transparency timestamp, a Rekor entry, and the in-toto statement
 `https://sigstore.dev/cosign/sign/v1` about that digest. It then runs `repository@sha256:…`. The
 policy is `LADDER_AGENT_SIGNATURE`: `keyless`, `off`, or by default `off` only for an agent whose

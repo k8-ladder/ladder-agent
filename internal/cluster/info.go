@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ladder/ladder-agent/internal/kube"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/internal/kube"
+	"github.com/k8-ladder/ladder-agent/protocol"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"

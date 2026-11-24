@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ladder/ladder-agent/internal/kube"
+	"github.com/k8-ladder/ladder-agent/internal/kube"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

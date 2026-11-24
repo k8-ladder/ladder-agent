@@ -16,8 +16,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/ladder/ladder-agent/internal/kube"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/internal/kube"
+	"github.com/k8-ladder/ladder-agent/protocol"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	validationpath "k8s.io/apimachinery/pkg/api/validation/path"

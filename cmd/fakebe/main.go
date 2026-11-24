@@ -38,7 +38,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/protocol"
 )
 
 //go:embed all:starter

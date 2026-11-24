@@ -1,41 +1,41 @@
-# The agent image. Every push to main that changes the agent tests it, builds
-# it for linux/amd64 and linux/arm64, since people's clusters run either,
-# pushes it to GHCR as its version and as latest, and signs it with cosign,
-# keyless: agents run a new version only once they have checked that this
-# workflow on main signed its digest (spec §5.9). The version is the build
-# time, as install-local.sh and k8s/deploy.sh make it. The deploy workflow then
-# has the cloud offer it to clusters (hetzner/README.md).
-name: agent
+# The agent's release. Every push to main that changes the agent tests it,
+# builds its image for linux/amd64 and linux/arm64, since people's clusters run
+# either, pushes it to GHCR as its version, signs it with cosign, keyless, and
+# only then tags it latest. Agents run a new version only once they have
+# checked that this workflow on main signed its digest. The version is the
+# build time.
+#
+# Last comes the release agent-<version>: install.sh and agent.yaml with the
+# image by digest, each with the cosign bundle of this workflow. Ladder clouds
+# offer the agent of the latest release to their clusters and install it from
+# there, so a new version needs no deploy of a cloud.
+name: release
 
 on:
   push:
     branches: [main]
-    paths:
-      - ladder-agent/**
-      # The release of install.sh and agent.yaml goes with each agent version.
-      - ladder-be/internal/api/install/**
-      - ladder-be/cmd/installfiles/**
-      - .github/workflows/agent.yml
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 # One build at a time, so latest is the last push's.
 concurrency:
-  group: agent
+  group: release
   cancel-in-progress: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: ladder-agent/go.mod
-          cache-dependency-path: ladder-agent/go.sum
+          go-version-file: go.mod
       - run: go test ./...
-        working-directory: ladder-agent
 
-  image:
+  release:
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -57,15 +57,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # The Dockerfile cross-compiles: both platforms build here without
-      # emulation. The deploy workflow reads the version from the label.
       - uses: sigstore/cosign-installer@v4.1.3
         with:
           cosign-release: v3.1.4
+      # The Dockerfile cross-compiles: both platforms build here without
+      # emulation.
       - uses: docker/build-push-action@v7
         id: build
         with:
-          context: ladder-agent
+          context: .
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ env.VERSION }}
           push: true
@@ -74,30 +74,26 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=agent
           cache-to: type=gha,mode=max,scope=agent
       # A Sigstore bundle of the image index's digest, an OCI referrer next to
       # the image, with the certificate of this workflow on main and its Rekor
-      # entry. Agents check it before they update (ladder-agent/internal/imagesig).
+      # entry. Agents check it before they update (internal/imagesig).
       - run: cosign sign --yes "$IMAGE@$DIGEST"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-      # latest names a signed image only: a deploy after the cloud workflow
-      # of the same push, which takes latest, never finds this one unsigned.
-      # imagetools keeps the index as it is, so the digest stays the signed one.
+      # latest names a signed image only. imagetools keeps the index as it
+      # is, so the digest stays the signed one.
       - run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-      # The release people may install from instead of a cloud (spec §5.3):
-      # install.sh, which takes LADDER_URL, and agent.yaml with this image by
-      # digest, each with the cosign bundle of this workflow. Published where
-      # the cloud has no say, it is what LADDER_INSTALL_URL names.
+      # The release, last: a cloud offers its version as soon as it is the
+      # latest, and the image is signed by then.
       - uses: actions/setup-go@v7
         with:
-          go-version-file: ladder-be/go.mod
-          cache-dependency-path: ladder-be/go.sum
+          go-version-file: go.mod
       - run: go run ./cmd/installfiles -image "$IMAGE@$DIGEST" -out "$RUNNER_TEMP/release"
-        working-directory: ladder-be
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
       - run: |
@@ -105,10 +101,11 @@ jobs:
             cosign sign-blob --yes --bundle "$RUNNER_TEMP/release/$f.sigstore.json" "$RUNNER_TEMP/release/$f"
           done
           gh release create "agent-$VERSION" "$RUNNER_TEMP"/release/* --latest \
-            --title "Agent $VERSION" --notes "Agent \`$IMAGE@$DIGEST\`. Install it from here, not from a cloud: \`curl -fsSL <this release>/install.sh | LADDER_URL=<your Ladder> LADDER_INSTALL_URL=<this release> sh\`."
+            --title "Agent $VERSION" --notes "Agent \`$IMAGE@$DIGEST\`, built from $GITHUB_SHA. Install it into the cluster of your current kubectl context: \`curl -fsSL $RELEASES/download/agent-$VERSION/install.sh | LADDER_URL=<your Ladder> LADDER_INSTALL_URL=$RELEASES/download/agent-$VERSION sh\`."
         env:
           GH_TOKEN: ${{ github.token }}
           DIGEST: ${{ steps.build.outputs.digest }}
-      - run: echo "Agent \`$IMAGE:$VERSION\` (\`$DIGEST\`), signed, and the release agent-$VERSION. The deploy workflow has the cloud offer it to clusters." >> "$GITHUB_STEP_SUMMARY"
+          RELEASES: ${{ github.server_url }}/${{ github.repository }}/releases
+      - run: echo "Agent \`$IMAGE:$VERSION\` (\`$DIGEST\`), signed, and the release agent-$VERSION, which Ladder clouds now offer to their clusters." >> "$GITHUB_STEP_SUMMARY"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

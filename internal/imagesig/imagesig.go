@@ -36,8 +36,9 @@ const (
 
 	// DefaultIssuer is GitHub Actions' OIDC issuer.
 	DefaultIssuer = "https://token.actions.githubusercontent.com"
-	// DefaultSigner is the workflow that builds and signs the agent.
-	DefaultSigner = `^https://github\.com/k8-ladder/ladder/\.github/workflows/agent\.yml@refs/heads/main$`
+	// DefaultSigner is the workflow that builds, signs and releases the
+	// agent: release.yml of github.com/k8-ladder/ladder-agent on main.
+	DefaultSigner = `^https://github\.com/k8-ladder/ladder-agent/\.github/workflows/release\.yml@refs/heads/main$`
 )
 
 // ErrUnsigned means the image has no signature bundle at all.

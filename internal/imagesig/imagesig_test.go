@@ -22,7 +22,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/verify"
 )
 
-const workflow = "https://github.com/k8-ladder/ladder/.github/workflows/agent.yml@refs/heads/main"
+const workflow = "https://github.com/k8-ladder/ladder-agent/.github/workflows/release.yml@refs/heads/main"
 
 func statement(digestHex, predicate string) []byte {
 	return fmt.Appendf(nil, `{"_type":"https://in-toto.io/Statement/v1","subject":[{"digest":{"sha256":%q}}],"predicateType":%q,"predicate":{}}`, digestHex, predicate)
@@ -53,13 +53,18 @@ func TestCheck(t *testing.T) {
 	if err := Check(vs, policy, good, strings.Repeat("cd", 32)); err == nil {
 		t.Error("a signature of another digest passes")
 	}
-	fork, _ := vs.Attest("https://github.com/someone/ladder/.github/workflows/agent.yml@refs/heads/main", DefaultIssuer, statement(digest, SignPredicate))
+	fork, _ := vs.Attest("https://github.com/someone/ladder-agent/.github/workflows/release.yml@refs/heads/main", DefaultIssuer, statement(digest, SignPredicate))
 	if err := Check(vs, policy, fork, digest); err == nil {
 		t.Error("another repository's workflow passes")
 	}
-	branch, _ := vs.Attest("https://github.com/k8-ladder/ladder/.github/workflows/agent.yml@refs/heads/evil", DefaultIssuer, statement(digest, SignPredicate))
+	branch, _ := vs.Attest("https://github.com/k8-ladder/ladder-agent/.github/workflows/release.yml@refs/heads/evil", DefaultIssuer, statement(digest, SignPredicate))
 	if err := Check(vs, policy, branch, digest); err == nil {
 		t.Error("another branch passes")
+	}
+	// The workflow that signed the agent before it had a repository of its own.
+	monorepo, _ := vs.Attest("https://github.com/k8-ladder/ladder/.github/workflows/agent.yml@refs/heads/main", DefaultIssuer, statement(digest, SignPredicate))
+	if err := Check(vs, policy, monorepo, digest); err == nil {
+		t.Error("the monorepo's agent workflow passes")
 	}
 	other, _ := vs.Attest(workflow, DefaultIssuer, statement(digest, "https://slsa.dev/provenance/v1"))
 	if err := Check(vs, policy, other, digest); err == nil {

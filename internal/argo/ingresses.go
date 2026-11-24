@@ -4,8 +4,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ladder/ladder-agent/internal/kube"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/internal/kube"
+	"github.com/k8-ladder/ladder-agent/protocol"
 )
 
 // appIngresses are the Ingresses Argo CD manages for the app, by name, with

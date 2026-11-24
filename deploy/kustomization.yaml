@@ -1,5 +1,5 @@
 # Dev install of the agent into k3d, talking to fakebe. The real install is
-# install.sh from the cloud (ladder-be/internal/api/install).
+# install.sh with agent.yaml (install/), from a release or from a cloud.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

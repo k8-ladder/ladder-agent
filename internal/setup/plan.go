@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ladder/ladder-agent/internal/platform"
-	"github.com/ladder/ladder-agent/internal/protocol"
+	"github.com/k8-ladder/ladder-agent/internal/platform"
+	"github.com/k8-ladder/ladder-agent/protocol"
 )
 
 var (
