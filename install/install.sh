@@ -15,7 +15,7 @@
 #
 # LADDER_INGRESS_PORT
 # is the port people reach the cluster's ingress on, when not 80, such as
-# 8080 for k3d -p 8080:80@loadbalancer. sandbox.sh sets LADDER_CLUSTER, the
+# 8080 for k3d -p 8080:80@loadbalancer. sandbox.sh and server.sh set LADDER_CLUSTER, the
 # cluster in Ladder this agent is for.
 #
 # Ladder knows a cluster by the UID of its kube-system namespace: run again
