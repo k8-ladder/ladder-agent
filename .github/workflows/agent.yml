@@ -69,9 +69,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ env.VERSION }}
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ env.VERSION }}
-            ${{ env.IMAGE }}:latest
+          # latest only once the image is signed, below.
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
           labels: |
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -81,6 +80,12 @@ jobs:
       # the image, with the certificate of this workflow on main and its Rekor
       # entry. Agents check it before they update (ladder-agent/internal/imagesig).
       - run: cosign sign --yes "$IMAGE@$DIGEST"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      # latest names a signed image only: a deploy after the cloud workflow
+      # of the same push, which takes latest, never finds this one unsigned.
+      # imagetools keeps the index as it is, so the digest stays the signed one.
+      - run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
       # The release people may install from instead of a cloud (spec §5.3):
