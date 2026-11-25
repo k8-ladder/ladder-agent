@@ -1,49 +1,160 @@
-# ladder-agent
+# Ladder agent
 
-The in-cluster part of Ladder (POC). It runs in namespace `ladder`, dials the Ladder cloud over
-WebSocket and does everything that touches Kubernetes:
+**The open-source agent that connects your Kubernetes cluster to [Ladder](https://k8-ladder.com/).**
+It sets up Argo CD and GitOps in your cluster and tells Ladder what runs there. It connects out to
+Ladder, so nothing has to reach into your cluster.
 
-- **cluster facts** for the cluster screen: version, nodes, free capacity, storage classes, access,
-  Argo CD detection with its Ingress address;
-- **Argo CD status:** a watch on Applications labelled `ladder.dev/managed=true`;
-- **setup engine**: a cluster check, Argo CD through the Helm SDK with its UI on
-  `/argocd`, the Secret Argo CD reads the repository in the cloud's Gitea with, root Application,
-  waiting for sync. Progress is kept in ConfigMap `ladder-setup-state`, so a restarted pod resumes;
-- **refresh:** on `argocd.refresh`, sent by the cloud when `main` gets a push, Argo CD reads git at
-  once;
-- **Argo CD credentials:** the initial admin password, on request;
-- **cluster reads for the assistant:** `kube.read` lists objects as `kubectl get` does, prints one
-  as YAML, and reads events and pod logs. It never changes anything, and hides the values of
-  Secrets.
+[Ladder](https://k8-ladder.com/) deploys your team's apps to your own Kubernetes cluster as simply
+as a PaaS does, while everything underneath stays plain GitOps that you own: you fill in a form,
+Ladder turns it into a commit in the cluster's git repository, and Argo CD in your cluster deploys
+it. The agent is the small program Ladder installs in your cluster for that. Its code is public,
+so you can read what runs in your cluster and check that the image you run was built from this
+repository.
 
-Git hosting, YAML edits and the API for the UI belong to the cloud, which is not in this
-repository. The cloud never connects to the cluster: the agent dials it, and refuses what the
-people who run the cluster turned off. The wire contract is in [PROTOCOL.md](PROTOCOL.md); the cloud
-imports its types from `protocol`.
+- **Website and sign-up:** [k8-ladder.com](https://k8-ladder.com/)
+- **User guide:** [k8-ladder.com/docs](https://k8-ladder.com/docs)
 
-## Releases
+## How it works
 
-Every push to `main` that changes the agent runs [release.yml](.github/workflows/release.yml): the
-tests, then the image for `linux/amd64` and `linux/arm64` as
-`ghcr.io/k8-ladder/ladder-agent:<version>` (the build time, such as `20261124112235`), signed
-with cosign keyless and only then tagged `latest`, then the release `agent-<version>`:
+```
+           your cluster                                 Ladder
+ +-----------------------------+                +--------------------+
+ |  ladder-agent               |---- HTTPS ---->|  portal            |
+ |                             |   (outbound)   |                    |
+ |  Argo CD                    |-- reads git -->|  repository        |
+ |     |                       |                +--------------------+
+ |     v                       |                  or in your GitHub
+ |  your apps                  |
+ +-----------------------------+
+```
 
-| File | What |
-|---|---|
-| `install.sh` | installs the agent into the cluster of the current kubectl context; takes `LADDER_URL` and `LADDER_INSTALL_URL` |
-| `agent.yaml` | the agent's manifest, with the image by digest |
-| `*.sigstore.json` | the cosign bundle of each, from the same workflow |
+- The agent opens one connection out to Ladder over HTTPS and keeps it open. Ladder never connects
+  into the cluster, so clusters behind NAT, behind a firewall or on a laptop work. The cluster needs
+  outbound HTTPS only.
+- Every change you make in Ladder is a commit in the cluster's repository. Argo CD deploys what is
+  on `main`. The agent never writes to git.
+- If you remove the agent, Argo CD and your apps keep running from git.
 
-A Ladder cloud offers the agent of the latest release to its clusters ("Update" on the Cluster
-page) and shows the install command that reads both files from there:
+## What the agent does
+
+- **Sets up GitOps.** Installs Argo CD in the namespace `argocd`, gives it read access to the
+  cluster's repository and hands it over to git: from then on Argo CD manages itself and your apps
+  from the repository. With Traefik turned on in Ladder it adds Traefik and cert-manager for HTTPS,
+  and it adds Metrics Server when the cluster has none.
+- **Reports what runs.** Kubernetes version, nodes, free CPU and memory, storage classes, and the
+  sync and health status of every app, for the cluster page in Ladder.
+- **Deploys right after a change.** When `main` gets a commit, the agent asks Argo CD to read git at
+  once rather than in a few minutes.
+- **Helps find problems.** Events and pod logs of your apps, and read-only lookups for Ladder's
+  assistant, as `kubectl get` would show them. It never shows the values of Secrets.
+- **Stores app secrets.** Writes the environment secrets you enter in Ladder straight into the
+  cluster, once. It cannot read them back, and git holds only a reference to them.
+- **Updates itself.** When you press **Update** in Ladder, to a new release signed by this
+  repository's release workflow.
+
+## Install
+
+Ladder shows the exact command with your connect code: in Ladder, add a cluster and choose
+**Import a cluster**. When Ladder creates the cluster for you (in DigitalOcean, on your Linux
+server or as a sandbox on your computer), it installs the agent itself.
+
+You need:
+
+- `kubectl` pointing at the cluster, with `cluster-admin` on it;
+- outbound HTTPS from the cluster: to Ladder, and to the registries of the agent's image
+  (`ghcr.io`) and of Argo CD;
+- no Argo CD in the cluster yet: Ladder installs its own.
+
+Run the command from Ladder in a terminal. It looks like this:
 
 ```bash
 curl -fsSL https://github.com/k8-ladder/ladder-agent/releases/latest/download/install.sh |
   LADDER_URL=https://<your Ladder> LADDER_INSTALL_URL=https://github.com/k8-ladder/ladder-agent/releases/latest/download sh
 ```
 
-The agent updates only to an image this workflow on `main` signed (`internal/imagesig`), and runs it
-by digest. To check a release yourself:
+The script:
+
+1. shows the kubectl context it is about to change and asks you to confirm;
+2. checks that you have `cluster-admin`;
+3. asks for the connect code from Ladder (valid for an hour, for one cluster);
+4. installs the agent: the namespace `ladder`, a ServiceAccount, a Deployment, and a Secret with
+   the agent's token;
+5. waits until the agent runs. The page in Ladder then moves on to setup by itself.
+
+It prints each command before it runs it, and running it again is safe: on a cluster Ladder already
+knows, it gives that cluster's agent a new token instead of adding another cluster.
+
+The script and the agent's image come from this repository's releases, not from the Ladder you
+install for: check that the command reads `install.sh` from `github.com/k8-ladder/ladder-agent`.
+
+## What the agent may do in your cluster
+
+| When | Rights |
+|---|---|
+| During setup | `cluster-admin`, to install Argo CD and the rest of the platform. |
+| After setup | The agent drops `cluster-admin` by itself and keeps only what Ladder's actions need (below). |
+| Updates that bring a new Argo CD | The cluster page in Ladder shows a command that lends the agent `cluster-admin` again for a few seconds. You run it. |
+
+After setup the agent:
+
+- **reads** the cluster as the built-in ClusterRole `view` does, plus nodes, storage classes,
+  custom resource definitions, RBAC objects and Argo CD's objects. No Secrets, no `exec`, `attach`
+  or `port-forward` into pods;
+- **creates** the namespaces of apps and their environment Secrets, which it cannot read back. An
+  admission policy lets it write only `Opaque` Secrets, and none in `kube-*` namespaces;
+- **in Argo CD's namespace**, manages Argo CD's Ingress and asks Argo CD to refresh. Another admission
+  policy keeps it from changing anything else of Argo CD's;
+- **in its own namespace `ladder`**, keeps its state and token, and updates its own Deployment.
+
+The exact rules are in [`internal/platform/files/agent.yaml`](internal/platform/files/agent.yaml).
+See them in your cluster with:
+
+```bash
+kubectl get clusterrolebinding ladder-agent ladder-agent-view ladder-agent-setup --ignore-not-found
+kubectl describe clusterrole ladder-agent
+```
+
+## Turn things off
+
+You decide what Ladder may do in your cluster, with settings on the agent's Deployment. Updates keep
+them.
+
+```bash
+kubectl -n ladder set env deploy/ladder-agent LADDER_REMOTE_UPGRADE=off
+```
+
+| Setting | Effect |
+|---|---|
+| `LADDER_REMOTE_UPGRADE=off` | **Update** in Ladder stops working; you update the agent by hand with `kubectl set image`. |
+| `LADDER_KUBE_READ=off` | The assistant cannot read the cluster. |
+| `LADDER_APP_LOGS=off` | Ladder shows no pod logs. |
+| `LADDER_READ_NAMESPACES=shop-*,billing` | The assistant reads only these namespaces (comma-separated, `*` matches any characters). |
+
+## See what Ladder did
+
+The agent writes down in your cluster every change Ladder asked for and every look the assistant
+took: setup, updates of the agent, new secret values (their names, never the values), the Argo CD
+sign-in and the assistant's reads. Ladder has no way to erase them:
+
+```bash
+kubectl -n ladder get configmap ladder-audit -o jsonpath='{.data.log}'   # the last 500
+kubectl -n ladder get events                                            # the last hour
+```
+
+## Updates and signatures
+
+When a new release is out, the cluster page in Ladder offers it within about ten minutes, and an
+admin presses **Update**. The old agent keeps running until the new one has connected, and if the
+new one does not start, the agent goes back to its version.
+
+The agent runs a new version only if this repository's [release workflow](.github/workflows/release.yml)
+on `main` signed it, with [cosign](https://docs.sigstore.dev/cosign/overview/) keyless: it checks
+the signature before it updates, and runs the image by its digest. So nobody who takes over Ladder,
+or pushes an image to the registry, can make your cluster run other code.
+
+Each [release](https://github.com/k8-ladder/ladder-agent/releases) `agent-<version>` has
+`install.sh`, `agent.yaml` (the agent's manifest, with the image by digest) and their signatures
+(`*.sigstore.json`). To check them yourself:
 
 ```bash
 cosign verify ghcr.io/k8-ladder/ladder-agent:<version> \
@@ -54,79 +165,48 @@ cosign verify-blob install.sh --bundle install.sh.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-## Layout
+## Stop or remove the agent
 
-| Path | What |
-|---|---|
-| `cmd/agent` | the agent |
-| `cmd/fakebe` | a stand-in backend for development; `GET /starter` renders a minimal starter repository from `cmd/fakebe/starter` |
-| `protocol` | wire types, imported by the cloud |
-| `install` | the templates of `install.sh` and `agent.yaml`, rendered for a release or by a cloud |
-| `cmd/installfiles` | renders the release's `install.sh` and `agent.yaml` |
-| `internal/link` | WebSocket client: reconnect, request dispatch, events |
-| `internal/cluster` | cluster facts |
-| `internal/platform` | the platform from the agent's image: Argo CD's values, the projects, the Applications of Argo CD, Traefik, cert-manager and Metrics Server, the ApplicationSet of apps, the deployer apps sync as and the policies for apps' namespaces; Argo CD's sslip.io host |
-| `internal/argo` | Application watcher |
-| `internal/inspect` | `kube.read`: objects, events and logs for the assistant |
-| `internal/setup` | setup engine, steps, state |
-| `internal/helmx` | Helm SDK wrapper |
-| `deploy/` | dev manifests for k3d, pointing at fakebe (the real install is `install.sh`) |
-
-## Run on k3d
+To stop Ladder without stopping your apps, for example if you stop trusting it:
 
 ```bash
-make fakebe            # terminal 1: backend stand-in on :9000
-make up                # build the image, import it into k3d, apply deploy/, restart
-make logs
-
-curl localhost:9000/cluster
-# The repository must exist with the starter files: the cloud commits them before setup.apply.
-curl -X POST localhost:9000/setup/plan  -d '{"provider":"ladder","owner":"acme","repo":"dev","repoURL":"http://host.k3d.internal:8081/git/acme/dev.git"}'
-curl -X POST localhost:9000/setup/apply -d '{"provider":"ladder","owner":"acme","repo":"dev","repoURL":"http://host.k3d.internal:8081/git/acme/dev.git","credentials":{"username":"<user>","password":"<token>"}}'
-curl localhost:9000/setup/status        # fakebe also prints every step change
-curl localhost:9000/apps
-curl localhost:9000/argocd/credentials
-curl -X POST localhost:9000/argocd/refresh
-curl -X POST localhost:9000/kube -d '{"op":"events","namespace":"argocd"}'
-curl -X POST localhost:9000/app/events -d '{"app":"shop-api"}'
-curl -X POST localhost:9000/app/logs -d '{"app":"shop-api","tailLines":50}'
-
-make reset             # remove Argo CD and setup state, restart the agent
+kubectl -n ladder scale deploy/ladder-agent --replicas=0   # Ladder reaches nothing in the cluster
+kubectl -n argocd get secret repo-deploy -o yaml > repo-deploy.yaml
+kubectl -n argocd delete secret repo-deploy                # Argo CD reads no new commits
 ```
 
-The agent in the cluster reaches fakebe at `host.k3d.internal:9000`.
+Your apps keep running the version they run. To start again, `kubectl apply -f repo-deploy.yaml`
+and scale the agent back to 1.
 
-`make run` starts the agent on the laptop against the current kube context: cluster facts, the
-watcher and setup work as in the cluster.
+To remove the agent for good, press **Disconnect** on the cluster page in Ladder and run the
+commands it shows:
 
-## Configuration
+```bash
+kubectl delete namespace ladder
+kubectl delete clusterrolebinding ladder-agent ladder-agent-view ladder-agent-setup --ignore-not-found
+kubectl delete clusterrole ladder-agent --ignore-not-found
+kubectl delete validatingadmissionpolicy,validatingadmissionpolicybinding ladder-agent-secrets ladder-agent-refresh --ignore-not-found
+kubectl -n argocd delete role,rolebinding ladder-agent --ignore-not-found
+```
 
-| Variable | Default | |
-|---|---|---|
-| `LADDER_BE_URL` | (required) | backend WebSocket URL, from Secret `ladder-agent` key `url` |
-| `LADDER_AGENT_TOKEN` | (required) | bearer token, from Secret `ladder-agent` key `token` |
-| `POD_NAMESPACE` | `ladder` | where the state ConfigMap and Secrets live |
-| `ARGOCD_NAMESPACE` | `argocd` | |
-| `ARGOCD_DEFAULT_VERSION` | `3.5.3` | |
-| `ARGOCD_CHART_VERSION` | `10.9.6` | the argo-cd chart that ships Argo CD 3.5.3 |
-| `ARGOCD_CHART_REPO` | `https://argoproj.github.io/argo-helm` | |
-| `HTTP_ADDR` | `:8081` | `/healthz` and `/readyz` |
-| `LOG_LEVEL` | `info` | |
-| `LADDER_REMOTE_UPGRADE` | on | `off` refuses `agent.upgrade` from the cloud |
-| `LADDER_AGENT_SIGNATURE` | `off` for an image in no registry, else `keyless` | `keyless` runs only images the release workflow signed, by digest |
-| `LADDER_AGENT_SIGNER`, `LADDER_AGENT_SIGNER_ISSUER` | `release.yml` of `k8-ladder/ladder-agent` on `main`, GitHub Actions | the signer's identity, a regular expression, and its OIDC issuer |
-| `LADDER_KUBE_READ`, `LADDER_APP_LOGS` | on | `off` refuses the assistant's reads, pod logs |
-| `LADDER_READ_NAMESPACES` | all | comma-separated globs the assistant's namespaced reads must match |
+Argo CD and your apps keep running, and the cluster's repository stays.
 
-## Known gaps in the POC
+## Troubleshooting
 
-- The agent only creates Argo CD's repository Secret. Creating the repository and committing the
-  starter files (apps and their charts) is the backend's job, before `setup.apply`.
-- A Helm release left `pending-install` by a killed pod stops the Argo CD step with a manual hint.
-- The watcher picks the Argo CD namespace at startup. Setting up into a non-default namespace needs
-  an agent restart to watch it.
-- Unit tests cover the sync check of setup, the platform's rendering and move from git, the watcher,
-  cluster reads, logs and the upgrade. Applying the platform needs a real cluster (k3d).
+| What you see | What to do |
+|---|---|
+| Ladder keeps "Waiting for the agent…", or says "Agent offline" | See what the agent does: `kubectl -n ladder get pods` and `kubectl -n ladder logs deploy/ladder-agent`. The cluster needs outbound HTTPS to Ladder. Restart it with `kubectl -n ladder rollout restart deploy/ladder-agent`. Your apps keep running meanwhile. |
+| The agent's pod is in `ErrImagePull` or `ImagePullBackOff` | The nodes cannot pull the image: check that they reach `ghcr.io`. |
+| The log says the token is unknown, or the namespace `ladder` is gone | Run the install command again. The cluster stays the same in Ladder, with its repository and apps. |
+| Ladder warns that an agent in another cluster used this cluster's token | The agent's Secret was copied into another cluster, such as by restoring a backup there. Ladder refused that agent; remove it there with the commands the warning shows. |
+
+More in the [user guide](https://k8-ladder.com/docs). Questions: **Support** in Ladder.
+
+## For developers
+
+How to build, test and run the agent, its layout and all its settings are in
+[DEVELOPMENT.md](DEVELOPMENT.md). The protocol between the agent and Ladder is in
+[PROTOCOL.md](PROTOCOL.md).
 
 ## License
 
